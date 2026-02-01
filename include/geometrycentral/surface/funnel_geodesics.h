@@ -35,6 +35,24 @@ std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
     Vertex startVert,
     Vertex endVert);
 
+/// Get cache statistics for the VeryDiscreteGeodesic pathfinder (for debugging)
+struct CacheStats {
+  size_t hits = 0;
+  size_t misses = 0;
+  size_t cacheSize = 0;
+};
+CacheStats getCacheStats();
+
+/// Get timing breakdown for profiling
+struct TimingStats {
+  double aStarMs = 0;
+  double flattenMs = 0;
+  double straightenMs = 0;
+  size_t pathCount = 0;
+};
+TimingStats getTimingStats();
+void resetTimingStats();
+
 // ============================================================================
 // Result class
 // ============================================================================
@@ -102,7 +120,9 @@ struct WaypointCorner {
   Vertex vertex;
   size_t faceIndex;
   double angleErrorDeg;
-  bool wantsToFlip() const { return angleErrorDeg > 1.0; }  // threshold
+  // C#: public bool WantToFlip() => AngleErrorDeg > 0 && CanStraighten;
+  // Note: CanStraighten is checked in computeFlipAction (canFlip)
+  bool wantsToFlip() const { return angleErrorDeg > 0; }
 };
 
 /// Action to flip a corner (add/remove faces)
@@ -133,6 +153,13 @@ FunnelResult runFunnel(
 
 // Phase 4: Build face strip from Dijkstra path
 std::vector<Face> buildFaceStrip(
+    ManifoldSurfaceMesh& mesh,
+    VertexPositionGeometry& geom,
+    Vertex start,
+    Vertex end);
+
+// Phase 4b: Build face strip via VeryDiscreteGeodesic (better initial corridors)
+std::vector<Face> buildFaceStripVeryDiscrete(
     ManifoldSurfaceMesh& mesh,
     VertexPositionGeometry& geom,
     Vertex start,

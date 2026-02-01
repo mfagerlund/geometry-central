@@ -1,6 +1,8 @@
 #include "geometrycentral/surface/funnel_geodesics.h"
 #include "geometrycentral/surface/mesh_graph_algorithms.h"
+#include "geometrycentral/surface/very_discrete_geodesic.h"
 
+#include <chrono>
 #include <cmath>
 #include <set>
 
@@ -10,6 +12,30 @@
 
 namespace geometrycentral {
 namespace surface {
+
+// Timing accumulators for profiling
+namespace {
+  double totalAStarTimeMs = 0;
+  double totalFlattenTimeMs = 0;
+  double totalStraightenTimeMs = 0;
+  size_t totalPathsComputed = 0;
+}
+
+TimingStats getTimingStats() {
+  TimingStats stats;
+  stats.aStarMs = totalAStarTimeMs;
+  stats.flattenMs = totalFlattenTimeMs;
+  stats.straightenMs = totalStraightenTimeMs;
+  stats.pathCount = totalPathsComputed;
+  return stats;
+}
+
+void resetTimingStats() {
+  totalAStarTimeMs = 0;
+  totalFlattenTimeMs = 0;
+  totalStraightenTimeMs = 0;
+  totalPathsComputed = 0;
+}
 
 // ============================================================================
 // Main API
@@ -22,74 +48,159 @@ std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
     Vertex endVert) {
 
   auto result = std::make_unique<FunnelGeodesicPath>(mesh, geom);
+  totalPathsComputed++;
 
-  // Phase 4: Build initial face strip via Dijkstra
-  result->sleeveFaces = funnel_internal::buildFaceStrip(mesh, geom, startVert, endVert);
+  // Phase 4: Build initial face strip via VeryDiscreteGeodesic (TIMED)
+  auto aStarStart = std::chrono::high_resolution_clock::now();
+  result->sleeveFaces = funnel_internal::buildFaceStripVeryDiscrete(mesh, geom, startVert, endVert);
   result->nFaces = result->sleeveFaces.size();
+  auto aStarEnd = std::chrono::high_resolution_clock::now();
+  totalAStarTimeMs += std::chrono::duration<double, std::milli>(aStarEnd - aStarStart).count();
 
-  // Phase 1: Flatten to 2D
+  // Phase 1-3: Flatten, portals, funnel (TIMED as "flatten")
+  auto flattenStart = std::chrono::high_resolution_clock::now();
   auto flatPos = funnel_internal::flattenSleeve(result->sleeveFaces, startVert, geom);
-
-  // Phase 2: Build portals
   auto portals = funnel_internal::buildPortals(result->sleeveFaces, flatPos);
-
-  // Phase 3: Initial funnel
   Vector2 entry2D = flatPos[startVert];
   Vector2 exit2D = flatPos[endVert];
   auto funnel = funnel_internal::runFunnel(portals, entry2D, exit2D);
+  auto flattenEnd = std::chrono::high_resolution_clock::now();
+  totalFlattenTimeMs += std::chrono::duration<double, std::milli>(flattenEnd - flattenStart).count();
 
-  // Phase 8: Iterative straightening - greedy best-first with reset on success
-  std::set<size_t> rejected;
+  // Straightening start (TIMED)
+  auto straightenStart = std::chrono::high_resolution_clock::now();
+
+  // Phase 8: Iterative straightening with phase-based optimization
+  // Port of C# InterativeStraightener.StraightenWithPhases()
+  //
+  // Each phase tries all corners; phases repeat until no improvement.
+  // This guarantees local optimality: if any single flip could improve the path,
+  // we would have found it.
+  std::set<size_t> rejectedThisPhase;
   const size_t maxIters = 20000;
   const double minImprovement = 0.00001;
+  const double negligibleImprovement = 0.0001;
 
-  for (size_t iter = 0; iter < maxIters; iter++) {
-    // Phase 5: Analyze corners
-    auto corners = funnel_internal::analyzeCorners(result->sleeveFaces, funnel, flatPos);
+  size_t iteration = 0;
+  int phase = 0;
 
-    // Select best corner to flip (most acute, not rejected)
+  // Initial analysis
+  auto corners = funnel_internal::analyzeCorners(result->sleeveFaces, funnel, flatPos);
+
+  // Helper lambda to check if there are flippable corners
+  auto hasFlippableCorners = [&]() {
+    for (const auto& c : corners) {
+      if (c.wantsToFlip() && !rejectedThisPhase.count(c.vertex.getIndex())) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  // Helper lambda to select best corner
+  auto selectCornerToFlip = [&]() -> funnel_internal::WaypointCorner* {
     funnel_internal::WaypointCorner* best = nullptr;
     double bestError = 0;
     for (auto& c : corners) {
       if (!c.wantsToFlip()) continue;
-      if (rejected.count(c.vertex.getIndex())) continue;
+      if (rejectedThisPhase.count(c.vertex.getIndex())) continue;
       if (c.angleErrorDeg > bestError) {
         best = &c;
         bestError = c.angleErrorDeg;
       }
     }
+    return best;
+  };
 
-    if (best == nullptr) break;  // Converged
+  // Check if already optimal (no corners want to flip)
+  if (!hasFlippableCorners()) {
+    // Already optimal - nothing to do
+  } else {
+    // Main optimization loop
+    while (iteration < maxIters) {
+      phase++;
+      double phaseStartDistance = funnel.distance;
+      rejectedThisPhase.clear();
 
-    // Phase 6: Compute flip action
-    auto action = funnel_internal::computeFlipAction(result->sleeveFaces, *best, mesh);
-    if (!action.canFlip) {
-      rejected.insert(best->vertex.getIndex());
-      continue;
-    }
+      // Run one phase - try all corners until none want to flip (or are all rejected)
+      while (iteration < maxIters) {
+        iteration++;
 
-    double oldDist = funnel.distance;
+        auto* cornerToFlip = selectCornerToFlip();
+        if (cornerToFlip == nullptr) {
+          break;  // Phase complete - no more corners to try
+        }
 
-    // Phase 7: Apply flip speculatively
-    auto newFaces = funnel_internal::applyFlip(result->sleeveFaces, action);
-    auto newFlatPos = funnel_internal::flattenSleeve(newFaces, startVert, geom);
-    auto newPortals = funnel_internal::buildPortals(newFaces, newFlatPos);
-    auto newFunnel = funnel_internal::runFunnel(newPortals, entry2D, newFlatPos[endVert]);
+        auto action = funnel_internal::computeFlipAction(result->sleeveFaces, *cornerToFlip, mesh);
+        if (!action.canFlip) {
+          // Corner can't be flipped (boundary constraint) - reject for this phase
+          rejectedThisPhase.insert(cornerToFlip->vertex.getIndex());
+          continue;
+        }
 
-    if (newFunnel.distance < oldDist - minImprovement) {
-      // Good flip - keep it and clear rejected set (geometry changed)
-      result->sleeveFaces = std::move(newFaces);
-      flatPos = std::move(newFlatPos);
-      portals = std::move(newPortals);
-      funnel = std::move(newFunnel);
-      exit2D = flatPos[endVert];
-      result->nIterations++;
-      rejected.clear();  // Reset - previously rejected corners may now help
-    } else {
-      // Bad flip - reject this corner for now
-      rejected.insert(best->vertex.getIndex());
+        size_t idx = cornerToFlip->vertex.getIndex();
+        double distanceBefore = funnel.distance;
+
+        // Apply flip speculatively
+        auto newFaces = funnel_internal::applyFlip(result->sleeveFaces, action);
+        auto newFlatPos = funnel_internal::flattenSleeve(newFaces, startVert, geom);
+        auto newPortals = funnel_internal::buildPortals(newFaces, newFlatPos);
+        auto newFunnel = funnel_internal::runFunnel(newPortals, entry2D, newFlatPos[endVert]);
+
+        // Require actual improvement
+        double actualImprovement = distanceBefore - newFunnel.distance;
+
+        if (newFunnel.distance > distanceBefore - minImprovement) {
+          // Bad flip - reject for this phase (don't apply)
+          rejectedThisPhase.insert(idx);
+          continue;
+        }
+
+        // Good flip - keep it
+        result->sleeveFaces = std::move(newFaces);
+        flatPos = std::move(newFlatPos);
+        portals = std::move(newPortals);
+        funnel = std::move(newFunnel);
+        exit2D = flatPos[endVert];
+        result->nIterations++;
+
+        // Re-analyze corners after flip
+        corners = funnel_internal::analyzeCorners(result->sleeveFaces, funnel, flatPos);
+
+        // If improvement is negligible (< 0.0001), mark as rejected to prevent infinite loops
+        // This catches cases where floating point drift causes tiny "improvements" that go nowhere
+        if (actualImprovement < negligibleImprovement) {
+          rejectedThisPhase.insert(idx);
+        }
+      }
+
+      // Phase complete - check for improvement
+      double phaseEndDistance = funnel.distance;
+      bool improved = phaseEndDistance < phaseStartDistance - minImprovement;
+
+      // Re-analyze corners to check if any want to flip
+      corners = funnel_internal::analyzeCorners(result->sleeveFaces, funnel, flatPos);
+      bool hasCorners = false;
+      for (const auto& c : corners) {
+        if (c.wantsToFlip()) {
+          hasCorners = true;
+          break;
+        }
+      }
+
+      if (!improved || !hasCorners) {
+        // No improvement this phase, or no more corners - we're locally optimal
+        break;
+      }
+
+      // Phase improved - continue to next phase
+      // (rejectedThisPhase.clear() happens at top of outer loop)
     }
   }
+
+  // End straightening timing
+  auto straightenEnd = std::chrono::high_resolution_clock::now();
+  totalStraightenTimeMs += std::chrono::duration<double, std::milli>(straightenEnd - straightenStart).count();
 
   result->pathLength = funnel.distance;
   result->nFaces = result->sleeveFaces.size();
@@ -910,6 +1021,96 @@ std::vector<Face> buildFaceStrip(
 }
 
 // ----------------------------------------------------------------------------
+// Phase 4b: Build face strip via VeryDiscreteGeodesic
+// Uses A* with multi-face jumps for better initial corridors
+// Uses cached pathfinder for performance (caches explorer results per corner)
+// ----------------------------------------------------------------------------
+
+// Static cached pathfinder - reused across calls on the same mesh
+static ManifoldSurfaceMesh* cachedMesh = nullptr;
+static VertexPositionGeometry* cachedGeom = nullptr;
+static std::unique_ptr<very_discrete_geodesic::CachedVeryDiscreteGeodesicPathfinder> cachedPathfinder;
+
+std::vector<Face> buildFaceStripVeryDiscrete(
+    ManifoldSurfaceMesh& mesh,
+    VertexPositionGeometry& geom,
+    Vertex start,
+    Vertex end) {
+
+  if (start == end) {
+    std::vector<Face> faces;
+    for (Face f : start.adjacentFaces()) {
+      faces.push_back(f);
+      return faces;
+    }
+    return faces;
+  }
+
+  // Create or reuse cached pathfinder
+  if (cachedMesh != &mesh || cachedGeom != &geom) {
+    cachedPathfinder = std::unique_ptr<very_discrete_geodesic::CachedVeryDiscreteGeodesicPathfinder>(
+        new very_discrete_geodesic::CachedVeryDiscreteGeodesicPathfinder(mesh, geom));
+    cachedMesh = &mesh;
+    cachedGeom = &geom;
+  }
+
+  // Use cached VeryDiscreteGeodesic to get face strip and path
+  std::pair<std::vector<Face>, std::vector<Vertex>> result =
+      cachedPathfinder->findFaceStripWithPath(start, end);
+
+  std::vector<Face>& faces = result.first;
+
+  // If VeryDiscreteGeodesic failed, fall back to Dijkstra
+  if (faces.empty()) {
+    return buildFaceStrip(mesh, geom, start, end);
+  }
+
+  // Validate first face contains start vertex
+  bool firstHasStart = false;
+  for (Vertex v : faces.front().adjacentVertices()) {
+    if (v == start) {
+      firstHasStart = true;
+      break;
+    }
+  }
+
+  // Validate last face contains end vertex
+  bool lastHasEnd = false;
+  for (Vertex v : faces.back().adjacentVertices()) {
+    if (v == end) {
+      lastHasEnd = true;
+      break;
+    }
+  }
+
+  // Fall back to Dijkstra if face strip is invalid
+  if (!firstHasStart || !lastHasEnd) {
+    return buildFaceStrip(mesh, geom, start, end);
+  }
+
+  // Validate connectivity: each consecutive pair must share an edge
+  for (size_t i = 1; i < faces.size(); i++) {
+    Face f1 = faces[i - 1];
+    Face f2 = faces[i];
+
+    bool sharesEdge = false;
+    for (Halfedge he : f1.adjacentHalfedges()) {
+      if (he.twin().face() == f2) {
+        sharesEdge = true;
+        break;
+      }
+    }
+
+    if (!sharesEdge) {
+      // Disconnected face strip - fall back to Dijkstra
+      return buildFaceStrip(mesh, geom, start, end);
+    }
+  }
+
+  return faces;
+}
+
+// ----------------------------------------------------------------------------
 // Phase 5: Analyze corners
 // Port of WaypointCornerAnalyzer.Populate() from C#
 // ----------------------------------------------------------------------------
@@ -1023,8 +1224,8 @@ static std::vector<Face> walkFanToFace(Halfedge startHe, Face exitFace, bool wal
     current = twin;
   }
 
-  // Didn't reach exit face - return empty to signal failure
-  return std::vector<Face>();
+  // C# returns partial result (what was collected) even if didn't reach exitFace
+  return result;
 }
 
 // ----------------------------------------------------------------------------
@@ -1120,10 +1321,11 @@ FlipAction computeFlipAction(
   std::vector<Face> walkA = walkFanToFace(startA, exitFace, true);
   std::vector<Face> walkB = walkFanToFace(startB, exitFace, false);
 
-  // Build set of faces currently in sleeve between entry and exit
-  std::set<Face> currentSleeveFaces;
-  for (size_t i = firstFaceWithVertex; i <= lastFaceWithVertex; i++) {
-    currentSleeveFaces.insert(faces[i]);
+  // C# checks overlap with removeFaces only, NOT with entry/exit faces
+  // Build removeFaces set (faces strictly between entry and exit)
+  std::set<Face> removeFaceSet;
+  for (const Face& f : action.removeFaces) {
+    removeFaceSet.insert(f);
   }
 
   bool aValid = !walkA.empty() || (startA.isInterior() && startA.face() == exitFace);
@@ -1139,15 +1341,16 @@ FlipAction computeFlipAction(
     walkB.clear();
   }
 
-  // Check for overlap with current sleeve
+  // C# checks: aOverlapsRemove = walkA.Any(f => removeFaceSet.Contains(f))
+  // Check for overlap with removeFaces (not the full sleeve range)
   if (aValid) {
     for (Face f : walkA) {
-      if (currentSleeveFaces.count(f)) { aValid = false; break; }
+      if (removeFaceSet.count(f)) { aValid = false; break; }
     }
   }
   if (bValid) {
     for (Face f : walkB) {
-      if (currentSleeveFaces.count(f)) { bValid = false; break; }
+      if (removeFaceSet.count(f)) { bValid = false; break; }
     }
   }
 
@@ -1211,6 +1414,16 @@ std::vector<Face> applyFlip(
 }
 
 } // namespace funnel_internal
+
+CacheStats getCacheStats() {
+  CacheStats stats;
+  if (funnel_internal::cachedPathfinder) {
+    stats.hits = funnel_internal::cachedPathfinder->getCacheHits();
+    stats.misses = funnel_internal::cachedPathfinder->getCacheMisses();
+    stats.cacheSize = funnel_internal::cachedPathfinder->getExplorationCacheSize();
+  }
+  return stats;
+}
 
 } // namespace surface
 } // namespace geometrycentral
