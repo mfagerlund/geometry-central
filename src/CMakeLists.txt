@@ -57,6 +57,7 @@ SET(SRCS
   surface/intrinsic_mollification.cpp
   surface/tufted_laplacian.cpp
   surface/flip_geodesics.cpp
+  surface/funnel_geodesics.cpp
   surface/stripe_patterns.cpp
   surface/transfer_functions.cpp
   surface/quadric_error_simplification.cpp
