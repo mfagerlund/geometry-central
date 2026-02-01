@@ -40,7 +40,6 @@ enum class CandidateName {
 };
 
 // ============================================================================
-// C#: public enum BlockedReason
 // ============================================================================
 enum class BlockedReason {
   None_,  // Can't use "None" because it conflicts
@@ -54,30 +53,21 @@ enum class BlockedReason {
 };
 
 // ============================================================================
-// C#: public record CandidateVertex(...)
 // ============================================================================
 struct CandidateVertex {
-  // C#: CandidateName Name,
   CandidateName name = CandidateName::None;
 
-  // C#: Hedge.Vertex? Vertex,
   Vertex vertex;  // Invalid vertex means null
 
-  // C#: Vector2 FlatPosition,
   Vector2 flatPosition = {std::numeric_limits<double>::quiet_NaN(),
                           std::numeric_limits<double>::quiet_NaN()};
 
-  // C#: float Distance,
   double distance = std::numeric_limits<double>::quiet_NaN();
 
-  // C#: bool IsReachable,
   bool isReachable = false;
 
-  // C#: BlockedReason Blocked,
   BlockedReason blocked = BlockedReason::NotComputed;
 
-  // C#: string? BlockedPortal = null
-  std::string blockedPortal = "";
 
   // Helper to check if vertex is valid (not null in C# terms)
   bool hasVertex() const { return vertex != Vertex(); }
@@ -110,64 +100,46 @@ struct ExplorationResult {
 };
 
 // ============================================================================
-// C#: public record VertexPathStep(Hedge.Vertex From, Hedge.Vertex To, bool IsApexJump, Hedge.Face[]? CrossedFaces)
 // ============================================================================
 struct VertexPathStep {
-  // C#: Hedge.Vertex From,
   Vertex from;
 
-  // C#: Hedge.Vertex To,
   Vertex to;
 
-  // C#: bool IsApexJump,
   bool isApexJump = false;
 
-  // C#: Hedge.Face[]? CrossedFaces
   std::vector<Face> crossedFaces;  // Empty = null in C#
 };
 
 // ============================================================================
-// C#: public readonly struct PathStep(...)
 // ============================================================================
 struct PathStep {
-  // C#: Hedge.Vertex From,
   Vertex from;
 
-  // C#: Hedge.Vertex To,
   Vertex to;
 
-  // C#: bool IsExplorerJump,
   bool isExplorerJump = false;
 
-  // C#: CandidateName CandidateName,
   CandidateName candidateName = CandidateName::None;
 
-  // C#: float Distance,
   double distance = 0.0;
 
-  // C#: Hedge.Face[]? CrossedFaces = null
   std::vector<Face> crossedFaces;  // Empty = null in C#
 };
 
 // ============================================================================
-// C#: public record PathResult(...)
 // ============================================================================
 struct PathResult {
-  // C#: List<Hedge.Vertex> Path,
   std::vector<Vertex> path;
 
-  // C#: List<PathStep> Steps,
   std::vector<PathStep> steps;
 
-  // C#: bool IsComplete,
   bool isComplete = false;
 
-  // C#: bool IsFallback
   bool isFallback = false;
 };
 
 // ============================================================================
-// C#: public enum WalkDirection { Clockwise, CounterClockwise }
 // ============================================================================
 enum class WalkDirection {
   Clockwise,
@@ -175,19 +147,14 @@ enum class WalkDirection {
 };
 
 // ============================================================================
-// C#: public record WalkResult(...)
 // ============================================================================
 struct WalkResult {
-  // C#: List<Hedge.Face> Faces,
   std::vector<Face> faces;
 
-  // C#: Hedge.Face? FinalFace,
   Face finalFace;  // Invalid face = null
 
-  // C#: bool ReachedTarget,
   bool reachedTarget = false;
 
-  // C#: string? Error
   std::string error = "";
 
   // Helper to check if finalFace is valid
@@ -208,17 +175,13 @@ ExplorationResult explore(Corner corner, VertexPositionGeometry& geom);
 // VeryDiscreteGeodesicExplorerHelper functions
 // ============================================================================
 
-// C#: internal static Vector2 FlattenVertex(Hedge.Vertex v, Hedge.Halfedge portal, Vector2 flatA, Vector2 flatB)
 Vector2 flattenVertex(Vertex v, Halfedge portal, Vector2 flatA, Vector2 flatB,
                       VertexPositionGeometry& geom);
 
-// C#: internal static Vector2 GetFlatPosition(Hedge.Vertex v, Hedge.Halfedge portal, Vector2 flatP1, Vector2 flatP2, Vector2 flatApex)
 Vector2 getFlatPosition(Vertex v, Halfedge portal, Vector2 flatP1, Vector2 flatP2, Vector2 flatApex);
 
-// C#: private static bool SegmentCrossesPortal(Vector2 v0, Vector2 target, Vector2 a, Vector2 b, float eps)
 bool segmentCrossesPortal(Vector2 v0, Vector2 target, Vector2 a, Vector2 b, double eps);
 
-// C#: CheckReachability1/2/3/4/5/6/7
 CandidateVertex checkReachability1(CandidateName name, Vertex vertex, Vector2 flatV0, Vector2 flatTarget, Face targetFace,
                                    Vector2 p1a, Vector2 p1b, double scaleTolerance);
 CandidateVertex checkReachability2(CandidateName name, Vertex vertex, Vector2 flatV0, Vector2 flatTarget, Face targetFace,
@@ -236,47 +199,38 @@ CandidateVertex checkReachability5(CandidateName name, Vertex vertex, Vector2 fl
 // VeryDiscreteGeodesicPathfinder functions
 // ============================================================================
 
-// C#: public static PathResult FindPath(Hedge.Vertex from, Hedge.Vertex to)
 PathResult findPath(Vertex from, Vertex to,
                     ManifoldSurfaceMesh& mesh,
                     VertexPositionGeometry& geom);
 
-// C#: public static (List<Hedge.Vertex> path, List<VertexPathStep> steps) FindGeodesicPath(...)
 std::pair<std::vector<Vertex>, std::vector<VertexPathStep>> findGeodesicPath(
     Vertex from, Vertex to,
     ManifoldSurfaceMesh& mesh,
     VertexPositionGeometry& geom);
 
-// C#: public static (List<Hedge.Face> faces, List<Hedge.Vertex> vertexPath) FindFaceStripWithPath(...)
 std::pair<std::vector<Face>, std::vector<Vertex>> findFaceStripWithPath(
     Vertex from, Vertex to,
     ManifoldSurfaceMesh& mesh,
     VertexPositionGeometry& geom);
 
-// C#: public static float ComputePathDistance(List<PathStep> steps)
 double computePathDistance(const std::vector<PathStep>& steps);
 
 // ============================================================================
 // FaceStripWalker functions
 // ============================================================================
 
-// C#: public static WalkDirection DetermineWalkDirection(...)
 WalkDirection determineWalkDirection(Vertex prev, Vertex current, Vertex next,
                                      VertexPositionGeometry& geom);
 
-// C#: public static WalkResult WalkToOutgoingEdge(...)
 WalkResult walkToOutgoingEdge(Face startFace, Vertex vertex, Vertex targetVertex,
                                WalkDirection direction);
 
-// C#: private static WalkResult WalkToFace(...)
 WalkResult walkToFace(Face startFace, Face targetFace, Vertex vertex, WalkDirection direction);
 
-// C#: public static Hedge.Face? SelectFirstFace(...)
 Face selectFirstFace(Vertex v0, Vertex v1, Vertex v2,
                      VertexPositionGeometry& geom,
                      Face targetFace = Face());
 
-// C#: public static List<Hedge.Face> ConvertPath(...)
 std::vector<Face> convertPath(const std::vector<Vertex>& path,
                                const std::vector<VertexPathStep>& steps,
                                Vertex entryVertex, Vertex exitVertex,
@@ -286,32 +240,24 @@ std::vector<Face> convertPath(const std::vector<Vertex>& path,
 // FaceStripUtils functions
 // ============================================================================
 
-// C#: public static Hedge.Face? GetSharedFace(Hedge.Vertex v1, Hedge.Vertex v2)
 Face getSharedFace(Vertex v1, Vertex v2);
 
-// C#: public static List<Hedge.Face> GetAllSharedFaces(...)
 std::vector<Face> getAllSharedFaces(Vertex v1, Vertex v2);
 
-// C#: public static bool AreFacesAdjacent(Hedge.Face f1, Hedge.Face f2)
 bool areFacesAdjacent(Face f1, Face f2);
 
-// C#: public static bool FaceContainsEdge(...)
 bool faceContainsEdge(Face face, Vertex v1, Vertex v2);
 
-// C#: public static bool FaceContainsVertex(...)
 bool faceContainsVertex(Face face, Vertex vertex);
 
-// C#: public static Hedge.Halfedge? FindHalfedgeToVertex(...)
 Halfedge findHalfedgeToVertex(Face face, Vertex vertex);
 
-// C#: public static Hedge.Halfedge? FindHalfedgeFromVertex(...)
 Halfedge findHalfedgeFromVertex(Face face, Vertex vertex);
 
 // ============================================================================
 // GeodesicPathJoiner functions
 // ============================================================================
 
-// C#: public static (List<Hedge.Vertex> path, List<VertexPathStep> steps) JoinPaths(...)
 std::pair<std::vector<Vertex>, std::vector<VertexPathStep>> joinPaths(
     const std::vector<std::pair<std::vector<Vertex>, std::vector<VertexPathStep>>>& segments,
     Vertex entryVertex, Vertex exitVertex,
@@ -321,7 +267,6 @@ std::pair<std::vector<Vertex>, std::vector<VertexPathStep>> joinPaths(
 // Helper: V2.ComputeTriangleApex from C#
 // ============================================================================
 
-// C#: V2.ComputeTriangleApex(Vector2 a, Vector2 b, float distA, float distB, bool pickPositiveY)
 Vector2 computeTriangleApex(Vector2 a, Vector2 b, double distA, double distB, bool pickPositiveY);
 
 // ============================================================================
