@@ -45,6 +45,23 @@ auto points = path->getPath();  // std::vector<SurfacePoint>
 
 **Algorithm:** FaceStripBuilding (Dijkstra corridor) → Funnel (unfold to 2D) → IterativeStraightener (quality-gated corner flipping)
 
+## Current Status
+
+**Working:**
+- Phase 1: 2D Flattening (flattenSleeve)
+- Phase 2: Portal Building (buildPortals)
+- Phase 3: Funnel Algorithm (runFunnel)
+- Phase 5: Corner Analysis (analyzeCorners)
+- Phase 6: Flip Action Computation (computeFlipAction)
+- Phase 7: Apply Flip (applyFlip)
+- Phase 8: Iterative Straightening loop
+
+**Needs Work:**
+- Phase 4: buildFaceStrip has connectivity issues
+  - Some face strips have gaps (non-adjacent consecutive faces)
+  - Need to port walk-based approach from C# FaceStripWalker.cs
+  - Current implementation uses simple edge-face collection
+
 ## Submodules
 
 If build fails with missing happly.h:
