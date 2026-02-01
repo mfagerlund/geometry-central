@@ -94,7 +94,14 @@ std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
   result->nFaces = result->sleeveFaces.size();
 
   // Convert waypoints to SurfacePoints
-  // TODO: Implement proper SurfacePoint conversion
+  // Path: startVert -> waypointVertices -> endVert
+  result->pathPoints.push_back(SurfacePoint(startVert));
+  for (Vertex v : funnel.waypointVertices) {
+    result->pathPoints.push_back(SurfacePoint(v));
+  }
+  result->pathPoints.push_back(SurfacePoint(endVert));
+
+  result->posGeom = &geom;
 
   return result;
 }
