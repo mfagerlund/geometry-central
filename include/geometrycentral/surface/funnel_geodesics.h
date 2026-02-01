@@ -109,9 +109,9 @@ struct WaypointCorner {
 struct FlipAction {
   std::vector<Face> removeFaces;
   std::vector<Face> addFaces;
+  size_t spliceAfterIndex;  // Insert addFaces after this face index
+  size_t spliceBeforeIndex; // And before this face index
   bool canFlip;
-
-  FlipAction reverse() const { return {addFaces, removeFaces, canFlip}; }
 };
 
 // Phase 1: Flatten face strip to 2D

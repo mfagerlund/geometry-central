@@ -38,7 +38,7 @@ std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
   Vector2 exit2D = flatPos[endVert];
   auto funnel = funnel_internal::runFunnel(portals, entry2D, exit2D);
 
-  // Phase 8: Iterative straightening
+  // Phase 8: Iterative straightening - greedy best-first with reset on success
   std::set<size_t> rejected;
   const size_t maxIters = 20000;
   const double minImprovement = 0.00001;
@@ -77,15 +77,16 @@ std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
     auto newFunnel = funnel_internal::runFunnel(newPortals, entry2D, newFlatPos[endVert]);
 
     if (newFunnel.distance < oldDist - minImprovement) {
-      // Good flip - keep it
+      // Good flip - keep it and clear rejected set (geometry changed)
       result->sleeveFaces = std::move(newFaces);
       flatPos = std::move(newFlatPos);
       portals = std::move(newPortals);
       funnel = std::move(newFunnel);
       exit2D = flatPos[endVert];
       result->nIterations++;
+      rejected.clear();  // Reset - previously rejected corners may now help
     } else {
-      // Bad flip - reject
+      // Bad flip - reject this corner for now
       rejected.insert(best->vertex.getIndex());
     }
   }
@@ -595,12 +596,144 @@ FunnelResult runFunnel(
 }
 
 // ----------------------------------------------------------------------------
-// Phase 4: Build face strip from Dijkstra path
-// Converts a halfedge path into an ordered face strip suitable for funnel algorithm
-//
-// The face strip connects start to end vertex. For each edge in the Dijkstra path,
-// we add one of its two adjacent faces. We ensure consecutive faces share an edge.
+// Phase 4: Build face strip from Dijkstra path (Walk-based approach)
+// Port of FaceStripWalker.cs - uses halfedge topology to walk around vertices
 // ----------------------------------------------------------------------------
+
+enum class WalkDirection { Clockwise, CounterClockwise };
+
+// Determine walk direction based on turn at a vertex (signed angle test)
+static WalkDirection determineWalkDirection(
+    Vector3 prevPos, Vector3 currPos, Vector3 nextPos, Vector3 normal) {
+  Vector3 incoming = prevPos - currPos;
+  Vector3 outgoing = nextPos - currPos;
+
+  // Project onto the tangent plane and compute signed angle
+  incoming = incoming - normal * dot(incoming, normal);
+  outgoing = outgoing - normal * dot(outgoing, normal);
+
+  // Cross product gives signed area - positive if CCW turn, negative if CW
+  Vector3 crossProd = cross(incoming, outgoing);
+  double signedAngle = dot(crossProd, normal);
+
+  // If left turn (CCW), walk CCW to find the exit edge
+  return (signedAngle > 0) ? WalkDirection::CounterClockwise : WalkDirection::Clockwise;
+}
+
+// Find halfedge in face that points TO the given vertex
+static Halfedge findHalfedgeToVertex(Face face, Vertex vertex) {
+  for (Halfedge he : face.adjacentHalfedges()) {
+    if (he.tipVertex() == vertex) {
+      return he;
+    }
+  }
+  return Halfedge();
+}
+
+// Find halfedge in face that leaves FROM the given vertex
+static Halfedge findHalfedgeFromVertex(Face face, Vertex vertex) {
+  for (Halfedge he : face.adjacentHalfedges()) {
+    if (he.tailVertex() == vertex) {
+      return he;
+    }
+  }
+  return Halfedge();
+}
+
+// Check if face contains edge between two vertices
+static bool faceContainsEdge(Face face, Vertex v1, Vertex v2) {
+  for (Halfedge he : face.adjacentHalfedges()) {
+    if ((he.tailVertex() == v1 && he.tipVertex() == v2) ||
+        (he.tailVertex() == v2 && he.tipVertex() == v1)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Walk around a vertex from startFace until finding a face containing edge to targetVertex
+// Returns the faces traversed (not including startFace, not including final face)
+static std::vector<Face> walkToOutgoingEdge(
+    Face startFace, Vertex vertex, Vertex targetVertex, WalkDirection direction) {
+
+  std::vector<Face> walked;
+
+  // Check if startFace already contains the target edge
+  if (faceContainsEdge(startFace, vertex, targetVertex)) {
+    return walked;
+  }
+
+  // Find starting halfedge
+  Halfedge startHe = findHalfedgeToVertex(startFace, vertex);
+  if (startHe == Halfedge()) {
+    return walked;
+  }
+
+  // Move to next face based on direction
+  Halfedge currentHe;
+  if (direction == WalkDirection::Clockwise) {
+    currentHe = startHe.next().twin();
+  } else {
+    currentHe = startHe.twin();
+  }
+
+  const int maxSteps = 100;
+  for (int step = 0; step < maxSteps; step++) {
+    if (!currentHe.isInterior()) {
+      // Hit boundary
+      return walked;
+    }
+
+    Face currentFace = currentHe.face();
+
+    if (currentFace == startFace) {
+      // Wrapped around without finding target edge
+      return walked;
+    }
+
+    walked.push_back(currentFace);
+
+    // Check if this face contains the target edge
+    if (faceContainsEdge(currentFace, vertex, targetVertex)) {
+      return walked;
+    }
+
+    // Move to next face
+    if (direction == WalkDirection::Clockwise) {
+      Halfedge leaving = findHalfedgeFromVertex(currentFace, vertex);
+      if (leaving == Halfedge()) return walked;
+      currentHe = leaving.twin();
+    } else {
+      Halfedge entering = findHalfedgeToVertex(currentFace, vertex);
+      if (entering == Halfedge()) return walked;
+      currentHe = entering.twin();
+    }
+  }
+
+  return walked;
+}
+
+// Get all faces shared by two vertices (faces containing the edge between them)
+static std::vector<Face> getSharedFaces(Vertex v1, Vertex v2) {
+  std::vector<Face> shared;
+  for (Halfedge he : v1.outgoingHalfedges()) {
+    if (he.tipVertex() == v2 && he.isInterior()) {
+      shared.push_back(he.face());
+    }
+  }
+  for (Halfedge he : v2.outgoingHalfedges()) {
+    if (he.tipVertex() == v1 && he.isInterior()) {
+      Face f = he.face();
+      bool already = false;
+      for (Face existing : shared) {
+        if (existing == f) { already = true; break; }
+      }
+      if (!already) shared.push_back(f);
+    }
+  }
+  return shared;
+}
+
 std::vector<Face> buildFaceStrip(
     ManifoldSurfaceMesh& mesh,
     VertexPositionGeometry& geom,
@@ -617,7 +750,7 @@ std::vector<Face> buildFaceStrip(
     return faces;
   }
 
-  // Use geometry-central's existing Dijkstra
+  // Use geometry-central's existing Dijkstra to get edge path
   std::vector<Halfedge> edgePath = shortestEdgePath(geom, start, end);
 
   if (edgePath.empty()) {
@@ -633,115 +766,118 @@ std::vector<Face> buildFaceStrip(
     return faces;
   }
 
-  // For each edge in the path, we have two faces. We need to pick a sequence
-  // of faces where consecutive faces share an edge.
-  //
-  // Strategy: For each edge, if the current face touches this edge, stay.
-  // Otherwise, cross to the other face.
-
-  // Initialize with a face from the first edge
-  Halfedge firstHe = edgePath[0];
-  Face currentFace;
-  if (firstHe.isInterior()) {
-    currentFace = firstHe.face();
-  } else {
-    currentFace = firstHe.twin().face();
+  // Convert edge path to vertex path
+  std::vector<Vertex> vertexPath;
+  vertexPath.push_back(start);
+  for (Halfedge he : edgePath) {
+    vertexPath.push_back(he.tipVertex());
   }
+
+  const VertexData<Vector3>& positions = geom.vertexPositions;
+
+  // Select first face - prefer the one that leads toward the second edge
+  Vertex v0 = vertexPath[0];
+  Vertex v1 = vertexPath[1];
+  auto firstEdgeFaces = getSharedFaces(v0, v1);
+
+  if (firstEdgeFaces.empty()) {
+    return faces;
+  }
+
+  Face currentFace;
+  if (vertexPath.size() >= 3 && firstEdgeFaces.size() > 1) {
+    // Pick the face that minimizes walk distance to the next edge
+    Vertex v2 = vertexPath[2];
+    int bestWalkLen = INT_MAX;
+
+    for (Face candFace : firstEdgeFaces) {
+      // Check if this face directly contains the next edge
+      if (faceContainsEdge(candFace, v1, v2)) {
+        currentFace = candFace;
+        bestWalkLen = 0;
+        break;
+      }
+
+      // Try both walk directions and pick shorter
+      auto walkCW = walkToOutgoingEdge(candFace, v1, v2, WalkDirection::Clockwise);
+      auto walkCCW = walkToOutgoingEdge(candFace, v1, v2, WalkDirection::CounterClockwise);
+
+      int cwLen = faceContainsEdge(candFace, v1, v2) ? 0 :
+                  (walkCW.empty() ? INT_MAX : static_cast<int>(walkCW.size()));
+      int ccwLen = faceContainsEdge(candFace, v1, v2) ? 0 :
+                   (walkCCW.empty() ? INT_MAX : static_cast<int>(walkCCW.size()));
+
+      // Check if walk actually reaches target
+      if (!walkCW.empty() && !faceContainsEdge(walkCW.back(), v1, v2)) cwLen = INT_MAX;
+      if (!walkCCW.empty() && !faceContainsEdge(walkCCW.back(), v1, v2)) ccwLen = INT_MAX;
+
+      int minLen = std::min(cwLen, ccwLen);
+      if (minLen < bestWalkLen) {
+        bestWalkLen = minLen;
+        currentFace = candFace;
+      }
+    }
+
+    if (currentFace == Face()) {
+      currentFace = firstEdgeFaces[0];
+    }
+  } else {
+    currentFace = firstEdgeFaces[0];
+  }
+
   faces.push_back(currentFace);
 
-  // Process each edge - decide whether to cross to the other face
-  for (size_t i = 0; i < edgePath.size(); i++) {
-    Halfedge he = edgePath[i];
-    Edge e = he.edge();
+  // Process each vertex transition using walk-based approach
+  for (size_t i = 1; i + 1 < vertexPath.size(); i++) {
+    Vertex prev = vertexPath[i - 1];
+    Vertex curr = vertexPath[i];
+    Vertex next = vertexPath[i + 1];
 
-    // Check if current face touches this edge
-    bool currentTouchesEdge = false;
-    for (Halfedge fhe : currentFace.adjacentHalfedges()) {
-      if (fhe.edge() == e) {
-        currentTouchesEdge = true;
+    // Check if current face already contains the next edge
+    if (faceContainsEdge(currentFace, curr, next)) {
+      continue;
+    }
+
+    // Determine walk direction based on turn
+    Vector3 normal{0, 0, 1};  // Default, will be overridden
+    for (Face f : curr.adjacentFaces()) {
+      // Use any face's normal as approximation
+      Halfedge he = f.halfedge();
+      Vector3 p0 = positions[he.vertex()];
+      Vector3 p1 = positions[he.next().vertex()];
+      Vector3 p2 = positions[he.next().next().vertex()];
+      normal = cross(p1 - p0, p2 - p0);
+      double len = norm(normal);
+      if (len > 1e-10) {
+        normal = normal / len;
         break;
       }
     }
 
-    if (!currentTouchesEdge) {
-      // We need to cross. Find a face adjacent to currentFace that touches this edge.
-      for (Face adjFace : currentFace.adjacentFaces()) {
-        for (Halfedge afhe : adjFace.adjacentHalfedges()) {
-          if (afhe.edge() == e) {
-            faces.push_back(adjFace);
-            currentFace = adjFace;
-            currentTouchesEdge = true;
-            break;
-          }
-        }
-        if (currentTouchesEdge) break;
+    WalkDirection direction = determineWalkDirection(
+        positions[prev], positions[curr], positions[next], normal);
+
+    // Walk from current face to find one containing the next edge
+    auto walk = walkToOutgoingEdge(currentFace, curr, next, direction);
+
+    // If primary direction failed, try opposite
+    if (walk.empty() || !faceContainsEdge(walk.back(), curr, next)) {
+      WalkDirection opposite = (direction == WalkDirection::Clockwise)
+          ? WalkDirection::CounterClockwise
+          : WalkDirection::Clockwise;
+      auto walkOpp = walkToOutgoingEdge(currentFace, curr, next, opposite);
+
+      if (!walkOpp.empty() && faceContainsEdge(walkOpp.back(), curr, next)) {
+        walk = walkOpp;
       }
     }
 
-    // After processing edge i, we should be on a face touching edge i.
-    // For the next iteration, we may need to cross to touch edge i+1.
-    // The crossing happens at the shared vertex between edges i and i+1.
-
-    if (i + 1 < edgePath.size()) {
-      Halfedge nextHe = edgePath[i + 1];
-      Edge nextE = nextHe.edge();
-
-      // Check if current face touches the next edge
-      bool touchesNext = false;
-      for (Halfedge fhe : currentFace.adjacentHalfedges()) {
-        if (fhe.edge() == nextE) {
-          touchesNext = true;
-          break;
-        }
-      }
-
-      if (!touchesNext) {
-        // Cross to a face that touches both current edge and next edge,
-        // or just next edge if needed
-        Vertex sharedVertex = he.twin().vertex();  // The vertex connecting edges i and i+1
-
-        // Walk around the shared vertex to find a face touching the next edge
-        for (Halfedge vhe : sharedVertex.outgoingHalfedges()) {
-          if (!vhe.isInterior()) continue;
-          Face candFace = vhe.face();
-
-          for (Halfedge cfhe : candFace.adjacentHalfedges()) {
-            if (cfhe.edge() == nextE) {
-              // This face touches the next edge
-              // Check if it's adjacent to current face
-              bool adjToCurrent = false;
-              for (Halfedge che : currentFace.adjacentHalfedges()) {
-                if (che.twin().isInterior() && che.twin().face() == candFace) {
-                  adjToCurrent = true;
-                  break;
-                }
-              }
-
-              if (adjToCurrent && candFace != currentFace) {
-                faces.push_back(candFace);
-                currentFace = candFace;
-              } else if (!adjToCurrent && candFace != currentFace) {
-                // Need an intermediate face
-                for (Face midFace : currentFace.adjacentFaces()) {
-                  // Check if midFace is adjacent to candFace
-                  for (Halfedge mhe : midFace.adjacentHalfedges()) {
-                    if (mhe.twin().isInterior() && mhe.twin().face() == candFace) {
-                      faces.push_back(midFace);
-                      faces.push_back(candFace);
-                      currentFace = candFace;
-                      goto done_crossing;
-                    }
-                  }
-                }
-                // Couldn't find intermediate - just add candFace
-                faces.push_back(candFace);
-                currentFace = candFace;
-              }
-              goto done_crossing;
-            }
-          }
-        }
-        done_crossing:;
+    // Add walked faces to the strip
+    for (Face f : walk) {
+      // Avoid duplicates
+      if (faces.empty() || faces.back() != f) {
+        faces.push_back(f);
+        currentFace = f;
       }
     }
   }
@@ -756,19 +892,18 @@ std::vector<Face> buildFaceStrip(
   }
 
   if (!lastHasEnd) {
+    // Walk to a face containing the end vertex
+    Vertex prev = vertexPath[vertexPath.size() - 2];
     for (Face f : end.adjacentFaces()) {
-      bool adjacent = false;
+      // Check if adjacent to current face
       for (Halfedge he : faces.back().adjacentHalfedges()) {
         if (he.twin().isInterior() && he.twin().face() == f) {
-          adjacent = true;
-          break;
+          faces.push_back(f);
+          goto found_end_face;
         }
       }
-      if (adjacent) {
-        faces.push_back(f);
-        break;
-      }
     }
+    found_end_face:;
   }
 
   return faces;
@@ -862,8 +997,9 @@ std::vector<WaypointCorner> analyzeCorners(
 
 // ----------------------------------------------------------------------------
 // Helper: Walk halfedge fan around a vertex until reaching exitFace
+// Walks in one direction around the vertex, collecting faces until hitting exit or boundary
 // ----------------------------------------------------------------------------
-static std::vector<Face> walkFan(Halfedge startHe, Face exitFace, bool usePrev = true) {
+static std::vector<Face> walkFanToFace(Halfedge startHe, Face exitFace, bool walkClockwise) {
   std::vector<Face> result;
   Halfedge current = startHe;
 
@@ -872,23 +1008,32 @@ static std::vector<Face> walkFan(Halfedge startHe, Face exitFace, bool usePrev =
 
     Face face = current.face();
     if (face == exitFace) {
+      // Reached the exit face - success
       return result;
     }
 
     result.push_back(face);
 
-    Halfedge neighbor = usePrev ? current.next().next() : current.next();
+    // Move to next face around the vertex
+    // For CW: go to prev halfedge's twin (prev = next.next for triangles)
+    // For CCW: go to next halfedge's twin
+    Halfedge neighbor = walkClockwise ? current.next().next() : current.next();
     Halfedge twin = neighbor.twin();
     if (!twin.isInterior()) break;
     current = twin;
   }
 
-  return result;
+  // Didn't reach exit face - return empty to signal failure
+  return std::vector<Face>();
 }
 
 // ----------------------------------------------------------------------------
 // Phase 6: Compute flip action
 // Port of WaypointCornerFlipAction.Compute() from C#
+//
+// A corner flip replaces faces around a waypoint vertex with alternate faces
+// on the "other side" of the vertex. This allows the path to take a different
+// route around the corner.
 // ----------------------------------------------------------------------------
 FlipAction computeFlipAction(
     const std::vector<Face>& faces,
@@ -897,6 +1042,8 @@ FlipAction computeFlipAction(
 
   FlipAction action;
   action.canFlip = false;
+  action.spliceAfterIndex = 0;
+  action.spliceBeforeIndex = 0;
 
   Vertex vertex = corner.vertex;
 
@@ -904,9 +1051,6 @@ FlipAction computeFlipAction(
   if (vertex.isBoundary()) {
     return action;
   }
-
-  // Find entry/exit faces - the faces before and after the corner vertex in the sleeve
-  size_t faceIndex = corner.faceIndex;
 
   // Find the first and last face in the sleeve that contains this vertex
   size_t firstFaceWithVertex = faces.size();
@@ -921,32 +1065,33 @@ FlipAction computeFlipAction(
     }
   }
 
-  if (firstFaceWithVertex >= faces.size() || lastFaceWithVertex < firstFaceWithVertex) {
+  if (firstFaceWithVertex >= faces.size()) {
     return action;
   }
 
+  // Entry and exit are the first and last faces containing the vertex
   Face entryFace = faces[firstFaceWithVertex];
-  Face exitFace = faces[std::min(lastFaceWithVertex + 1, faces.size() - 1)];
+  Face exitFace = faces[lastFaceWithVertex];
 
-  // If there are no faces strictly between entry and exit, no flip possible
+  // Store splice indices for applyFlip
+  action.spliceAfterIndex = firstFaceWithVertex;
+  action.spliceBeforeIndex = lastFaceWithVertex;
+
+  // If vertex only appears in one face, no flip possible
   if (lastFaceWithVertex <= firstFaceWithVertex) {
     return action;
   }
 
-  // RemoveFaces = faces strictly between entry and exit that contain this vertex
-  for (size_t i = firstFaceWithVertex + 1; i <= lastFaceWithVertex; i++) {
+  // RemoveFaces = faces STRICTLY BETWEEN entry and exit (not including entry or exit)
+  for (size_t i = firstFaceWithVertex + 1; i < lastFaceWithVertex; i++) {
     action.removeFaces.push_back(faces[i]);
-  }
-
-  if (action.removeFaces.empty()) {
-    return action;
   }
 
   // Find the halfedge in entry face that points TO the vertex
   Halfedge heToVertex;
   bool foundHe = false;
   for (Halfedge he : entryFace.adjacentHalfedges()) {
-    if (he.next().vertex() == vertex) {
+    if (he.tipVertex() == vertex) {
       heToVertex = he;
       foundHe = true;
       break;
@@ -958,32 +1103,62 @@ FlipAction computeFlipAction(
   }
 
   // Walk both directions of the fan from entry toward exit
-  std::vector<Face> walkA = walkFan(heToVertex.twin(), exitFace, true);
-  std::vector<Face> walkB = walkFan(heToVertex.next().twin(), exitFace, false);
+  // walkA: start from heToVertex.twin(), walk CW
+  // walkB: start from the other halfedge's twin, walk CCW
+  Halfedge startA = heToVertex.twin();
 
-  // AddFaces = the fan walk that does NOT overlap with removeFaces
-  std::set<Face> removeFaceSet(action.removeFaces.begin(), action.removeFaces.end());
-
-  bool aOverlapsRemove = false;
-  for (Face f : walkA) {
-    if (removeFaceSet.count(f)) {
-      aOverlapsRemove = true;
+  // Find the halfedge from vertex in entryFace (the outgoing one)
+  Halfedge heFromVertex;
+  for (Halfedge he : entryFace.adjacentHalfedges()) {
+    if (he.tailVertex() == vertex) {
+      heFromVertex = he;
       break;
     }
   }
+  Halfedge startB = heFromVertex.twin();
 
-  bool bOverlapsRemove = false;
-  for (Face f : walkB) {
-    if (removeFaceSet.count(f)) {
-      bOverlapsRemove = true;
-      break;
+  std::vector<Face> walkA = walkFanToFace(startA, exitFace, true);
+  std::vector<Face> walkB = walkFanToFace(startB, exitFace, false);
+
+  // Build set of faces currently in sleeve between entry and exit
+  std::set<Face> currentSleeveFaces;
+  for (size_t i = firstFaceWithVertex; i <= lastFaceWithVertex; i++) {
+    currentSleeveFaces.insert(faces[i]);
+  }
+
+  bool aValid = !walkA.empty() || (startA.isInterior() && startA.face() == exitFace);
+  bool bValid = !walkB.empty() || (startB.isInterior() && startB.face() == exitFace);
+
+  // walkA/walkB are empty if they reached exitFace immediately
+  if (startA.isInterior() && startA.face() == exitFace) {
+    aValid = true;
+    walkA.clear();
+  }
+  if (startB.isInterior() && startB.face() == exitFace) {
+    bValid = true;
+    walkB.clear();
+  }
+
+  // Check for overlap with current sleeve
+  if (aValid) {
+    for (Face f : walkA) {
+      if (currentSleeveFaces.count(f)) { aValid = false; break; }
+    }
+  }
+  if (bValid) {
+    for (Face f : walkB) {
+      if (currentSleeveFaces.count(f)) { bValid = false; break; }
     }
   }
 
-  if (!aOverlapsRemove && !walkA.empty()) {
+  // Pick the shorter valid walk
+  if (aValid && bValid) {
+    action.addFaces = (walkA.size() <= walkB.size()) ? walkA : walkB;
+    action.canFlip = true;
+  } else if (aValid) {
     action.addFaces = walkA;
     action.canFlip = true;
-  } else if (!bOverlapsRemove && !walkB.empty()) {
+  } else if (bValid) {
     action.addFaces = walkB;
     action.canFlip = true;
   }
@@ -994,37 +1169,31 @@ FlipAction computeFlipAction(
 // ----------------------------------------------------------------------------
 // Phase 7: Apply flip
 // Port of Sleeve.ComputeNewFaces() from C#
+//
+// Splices addFaces into the sleeve between spliceAfterIndex and spliceBeforeIndex,
+// removing any intermediate faces.
 // ----------------------------------------------------------------------------
 std::vector<Face> applyFlip(
     const std::vector<Face>& faces,
     const FlipAction& action) {
 
-  if (!action.canFlip || action.removeFaces.empty()) {
+  if (!action.canFlip) {
     return faces;
   }
 
-  // Build set of faces to remove
-  std::set<Face> removeFaceSet(action.removeFaces.begin(), action.removeFaces.end());
+  // Use the splice indices from computeFlipAction
+  size_t spliceAfter = action.spliceAfterIndex;
+  size_t spliceBefore = action.spliceBeforeIndex;
 
-  // Find splice boundaries
-  int firstRemoveIdx = -1;
-  int lastRemoveIdx = -1;
-  for (size_t i = 0; i < faces.size(); i++) {
-    if (removeFaceSet.count(faces[i])) {
-      if (firstRemoveIdx < 0) firstRemoveIdx = static_cast<int>(i);
-      lastRemoveIdx = static_cast<int>(i);
-    }
-  }
-
-  if (firstRemoveIdx < 0) {
-    return faces;  // Nothing to remove
+  if (spliceAfter >= faces.size() || spliceBefore >= faces.size() || spliceBefore <= spliceAfter) {
+    return faces;
   }
 
   std::vector<Face> newFaces;
-  newFaces.reserve(faces.size() - action.removeFaces.size() + action.addFaces.size());
+  newFaces.reserve(faces.size() - (spliceBefore - spliceAfter - 1) + action.addFaces.size());
 
-  // Prefix: faces before first remove
-  for (int i = 0; i < firstRemoveIdx; i++) {
+  // Prefix: faces up to and including spliceAfter (entry face)
+  for (size_t i = 0; i <= spliceAfter; i++) {
     newFaces.push_back(faces[i]);
   }
 
@@ -1033,8 +1202,8 @@ std::vector<Face> applyFlip(
     newFaces.push_back(f);
   }
 
-  // Suffix: faces after last remove
-  for (size_t i = lastRemoveIdx + 1; i < faces.size(); i++) {
+  // Suffix: faces from spliceBefore onwards (exit face and beyond)
+  for (size_t i = spliceBefore; i < faces.size(); i++) {
     newFaces.push_back(faces[i]);
   }
 
