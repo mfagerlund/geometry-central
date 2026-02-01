@@ -47,20 +47,28 @@ auto points = path->getPath();  // std::vector<SurfacePoint>
 
 ## Current Status
 
-**Working:**
+**All phases working - 13/13 tests pass**
+
 - Phase 1: 2D Flattening (flattenSleeve)
 - Phase 2: Portal Building (buildPortals)
 - Phase 3: Funnel Algorithm (runFunnel)
+- Phase 4: Face Strip Building (buildFaceStrip) - walk-based approach from C# FaceStripWalker
 - Phase 5: Corner Analysis (analyzeCorners)
 - Phase 6: Flip Action Computation (computeFlipAction)
 - Phase 7: Apply Flip (applyFlip)
 - Phase 8: Iterative Straightening loop
 
-**Needs Work:**
-- Phase 4: buildFaceStrip has connectivity issues
-  - Some face strips have gaps (non-adjacent consecutive faces)
-  - Need to port walk-based approach from C# FaceStripWalker.cs
-  - Current implementation uses simple edge-face collection
+**Benchmark Results (vs FlipOut):**
+- spot.ply (2930 verts): GFR 1.05x faster, paths within 0.04% of FlipOut
+- bob_small.ply (250 verts): GFR 3.66x faster, 85% equal paths
+
+## Run Benchmark
+
+```bash
+cd benchmark/build
+"$CMAKE" .. && "$CMAKE" --build . --config Release
+./bin/Release/geodesic-comparison.exe ../test/assets/spot.ply 100 42
+```
 
 ## Submodules
 
