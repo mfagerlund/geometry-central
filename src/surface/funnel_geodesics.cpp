@@ -597,6 +597,9 @@ FunnelResult runFunnel(
 // ----------------------------------------------------------------------------
 // Phase 4: Build face strip from Dijkstra path
 // Converts a halfedge path into an ordered face strip suitable for funnel algorithm
+//
+// The face strip connects start to end vertex. For each edge in the Dijkstra path,
+// we add one of its two adjacent faces. We ensure consecutive faces share an edge.
 // ----------------------------------------------------------------------------
 std::vector<Face> buildFaceStrip(
     ManifoldSurfaceMesh& mesh,
@@ -606,12 +609,19 @@ std::vector<Face> buildFaceStrip(
 
   std::vector<Face> faces;
 
+  if (start == end) {
+    for (Face f : start.adjacentFaces()) {
+      faces.push_back(f);
+      return faces;
+    }
+    return faces;
+  }
+
   // Use geometry-central's existing Dijkstra
   std::vector<Halfedge> edgePath = shortestEdgePath(geom, start, end);
 
   if (edgePath.empty()) {
-    // start and end might be the same vertex or on the same face
-    // Try to find a face containing both
+    // Start and end on same face
     for (Face f : start.adjacentFaces()) {
       for (Vertex v : f.adjacentVertices()) {
         if (v == end) {
@@ -623,122 +633,133 @@ std::vector<Face> buildFaceStrip(
     return faces;
   }
 
-  // Build ordered face strip from edge path
-  // For each edge in the path, we pick one of its two adjacent faces
-  // We want to create a connected strip where consecutive faces share an edge
+  // For each edge in the path, we have two faces. We need to pick a sequence
+  // of faces where consecutive faces share an edge.
+  //
+  // Strategy: For each edge, if the current face touches this edge, stay.
+  // Otherwise, cross to the other face.
 
-  std::set<Face> usedFaces;
-
-  // Start with the first edge's face
+  // Initialize with a face from the first edge
+  Halfedge firstHe = edgePath[0];
   Face currentFace;
-  if (edgePath[0].isInterior()) {
-    currentFace = edgePath[0].face();
+  if (firstHe.isInterior()) {
+    currentFace = firstHe.face();
   } else {
-    currentFace = edgePath[0].twin().face();
+    currentFace = firstHe.twin().face();
   }
   faces.push_back(currentFace);
-  usedFaces.insert(currentFace);
 
-  // Process each edge in the path
+  // Process each edge - decide whether to cross to the other face
   for (size_t i = 0; i < edgePath.size(); i++) {
     Halfedge he = edgePath[i];
+    Edge e = he.edge();
 
-    // Get the two faces adjacent to this edge
-    Face f1 = he.isInterior() ? he.face() : Face();
-    Face f2 = he.twin().isInterior() ? he.twin().face() : Face();
-
-    // Add faces that touch this edge and are adjacent to current face
-    if (f1 != Face() && f1 != currentFace && usedFaces.find(f1) == usedFaces.end()) {
-      // Check if f1 is adjacent to currentFace
-      bool adjacent = false;
-      for (Halfedge cfhe : currentFace.adjacentHalfedges()) {
-        if (cfhe.twin().face() == f1) {
-          adjacent = true;
-          break;
-        }
-      }
-      if (adjacent) {
-        faces.push_back(f1);
-        usedFaces.insert(f1);
-        currentFace = f1;
+    // Check if current face touches this edge
+    bool currentTouchesEdge = false;
+    for (Halfedge fhe : currentFace.adjacentHalfedges()) {
+      if (fhe.edge() == e) {
+        currentTouchesEdge = true;
+        break;
       }
     }
 
-    if (f2 != Face() && f2 != currentFace && usedFaces.find(f2) == usedFaces.end()) {
-      bool adjacent = false;
-      for (Halfedge cfhe : currentFace.adjacentHalfedges()) {
-        if (cfhe.twin().face() == f2) {
-          adjacent = true;
-          break;
-        }
-      }
-      if (adjacent) {
-        faces.push_back(f2);
-        usedFaces.insert(f2);
-        currentFace = f2;
-      }
-    }
-
-    // If we need to get to the other side of this edge, add it
-    if (i + 1 < edgePath.size()) {
-      Halfedge nextHe = edgePath[i + 1];
-      Face nextFace1 = nextHe.isInterior() ? nextHe.face() : Face();
-      Face nextFace2 = nextHe.twin().isInterior() ? nextHe.twin().face() : Face();
-
-      // Check if we need to cross to a face on the next edge
-      bool needNext1 = nextFace1 != Face() && usedFaces.find(nextFace1) == usedFaces.end();
-      bool needNext2 = nextFace2 != Face() && usedFaces.find(nextFace2) == usedFaces.end();
-
-      if (needNext1 || needNext2) {
-        // Find a face adjacent to current that leads to next edge
-        for (Face adjFace : currentFace.adjacentFaces()) {
-          if (usedFaces.find(adjFace) != usedFaces.end()) continue;
-
-          // Check if this face touches the next edge
-          bool touchesNext = false;
-          for (Halfedge afhe : adjFace.adjacentHalfedges()) {
-            if (afhe.edge() == nextHe.edge()) {
-              touchesNext = true;
-              break;
-            }
-          }
-
-          if (touchesNext) {
+    if (!currentTouchesEdge) {
+      // We need to cross. Find a face adjacent to currentFace that touches this edge.
+      for (Face adjFace : currentFace.adjacentFaces()) {
+        for (Halfedge afhe : adjFace.adjacentHalfedges()) {
+          if (afhe.edge() == e) {
             faces.push_back(adjFace);
-            usedFaces.insert(adjFace);
             currentFace = adjFace;
+            currentTouchesEdge = true;
             break;
           }
         }
+        if (currentTouchesEdge) break;
+      }
+    }
+
+    // After processing edge i, we should be on a face touching edge i.
+    // For the next iteration, we may need to cross to touch edge i+1.
+    // The crossing happens at the shared vertex between edges i and i+1.
+
+    if (i + 1 < edgePath.size()) {
+      Halfedge nextHe = edgePath[i + 1];
+      Edge nextE = nextHe.edge();
+
+      // Check if current face touches the next edge
+      bool touchesNext = false;
+      for (Halfedge fhe : currentFace.adjacentHalfedges()) {
+        if (fhe.edge() == nextE) {
+          touchesNext = true;
+          break;
+        }
+      }
+
+      if (!touchesNext) {
+        // Cross to a face that touches both current edge and next edge,
+        // or just next edge if needed
+        Vertex sharedVertex = he.twin().vertex();  // The vertex connecting edges i and i+1
+
+        // Walk around the shared vertex to find a face touching the next edge
+        for (Halfedge vhe : sharedVertex.outgoingHalfedges()) {
+          if (!vhe.isInterior()) continue;
+          Face candFace = vhe.face();
+
+          for (Halfedge cfhe : candFace.adjacentHalfedges()) {
+            if (cfhe.edge() == nextE) {
+              // This face touches the next edge
+              // Check if it's adjacent to current face
+              bool adjToCurrent = false;
+              for (Halfedge che : currentFace.adjacentHalfedges()) {
+                if (che.twin().isInterior() && che.twin().face() == candFace) {
+                  adjToCurrent = true;
+                  break;
+                }
+              }
+
+              if (adjToCurrent && candFace != currentFace) {
+                faces.push_back(candFace);
+                currentFace = candFace;
+              } else if (!adjToCurrent && candFace != currentFace) {
+                // Need an intermediate face
+                for (Face midFace : currentFace.adjacentFaces()) {
+                  // Check if midFace is adjacent to candFace
+                  for (Halfedge mhe : midFace.adjacentHalfedges()) {
+                    if (mhe.twin().isInterior() && mhe.twin().face() == candFace) {
+                      faces.push_back(midFace);
+                      faces.push_back(candFace);
+                      currentFace = candFace;
+                      goto done_crossing;
+                    }
+                  }
+                }
+                // Couldn't find intermediate - just add candFace
+                faces.push_back(candFace);
+                currentFace = candFace;
+              }
+              goto done_crossing;
+            }
+          }
+        }
+        done_crossing:;
       }
     }
   }
 
-  // Ensure the last face contains the end vertex
-  bool lastFaceHasEnd = false;
-  if (!faces.empty()) {
-    for (Vertex v : faces.back().adjacentVertices()) {
-      if (v == end) {
-        lastFaceHasEnd = true;
-        break;
-      }
+  // Ensure last face contains end vertex
+  bool lastHasEnd = false;
+  for (Vertex v : faces.back().adjacentVertices()) {
+    if (v == end) {
+      lastHasEnd = true;
+      break;
     }
   }
 
-  if (!lastFaceHasEnd) {
-    // Find a face containing end that is adjacent to the last face
+  if (!lastHasEnd) {
     for (Face f : end.adjacentFaces()) {
-      if (usedFaces.find(f) != usedFaces.end()) continue;
-
-      if (faces.empty()) {
-        faces.push_back(f);
-        break;
-      }
-
-      // Check if adjacent to last face
       bool adjacent = false;
-      for (Halfedge lfhe : faces.back().adjacentHalfedges()) {
-        if (lfhe.twin().face() == f) {
+      for (Halfedge he : faces.back().adjacentHalfedges()) {
+        if (he.twin().isInterior() && he.twin().face() == f) {
           adjacent = true;
           break;
         }
