@@ -630,8 +630,10 @@ std::vector<Face> buildFaceStrip(
   std::set<Face> usedFaces;
 
   // Start with the first edge's face
-  Face currentFace = edgePath[0].face();
-  if (!currentFace.isInterior()) {
+  Face currentFace;
+  if (edgePath[0].isInterior()) {
+    currentFace = edgePath[0].face();
+  } else {
     currentFace = edgePath[0].twin().face();
   }
   faces.push_back(currentFace);
@@ -642,11 +644,11 @@ std::vector<Face> buildFaceStrip(
     Halfedge he = edgePath[i];
 
     // Get the two faces adjacent to this edge
-    Face f1 = he.face();
+    Face f1 = he.isInterior() ? he.face() : Face();
     Face f2 = he.twin().isInterior() ? he.twin().face() : Face();
 
     // Add faces that touch this edge and are adjacent to current face
-    if (f1.isInterior() && f1 != currentFace && usedFaces.find(f1) == usedFaces.end()) {
+    if (f1 != Face() && f1 != currentFace && usedFaces.find(f1) == usedFaces.end()) {
       // Check if f1 is adjacent to currentFace
       bool adjacent = false;
       for (Halfedge cfhe : currentFace.adjacentHalfedges()) {
@@ -662,7 +664,7 @@ std::vector<Face> buildFaceStrip(
       }
     }
 
-    if (f2.isInterior() && f2 != currentFace && usedFaces.find(f2) == usedFaces.end()) {
+    if (f2 != Face() && f2 != currentFace && usedFaces.find(f2) == usedFaces.end()) {
       bool adjacent = false;
       for (Halfedge cfhe : currentFace.adjacentHalfedges()) {
         if (cfhe.twin().face() == f2) {
@@ -680,18 +682,17 @@ std::vector<Face> buildFaceStrip(
     // If we need to get to the other side of this edge, add it
     if (i + 1 < edgePath.size()) {
       Halfedge nextHe = edgePath[i + 1];
-      Face nextFace1 = nextHe.face();
+      Face nextFace1 = nextHe.isInterior() ? nextHe.face() : Face();
       Face nextFace2 = nextHe.twin().isInterior() ? nextHe.twin().face() : Face();
 
       // Check if we need to cross to a face on the next edge
-      bool needNext1 = nextFace1.isInterior() && usedFaces.find(nextFace1) == usedFaces.end();
-      bool needNext2 = nextFace2.isInterior() && usedFaces.find(nextFace2) == usedFaces.end();
+      bool needNext1 = nextFace1 != Face() && usedFaces.find(nextFace1) == usedFaces.end();
+      bool needNext2 = nextFace2 != Face() && usedFaces.find(nextFace2) == usedFaces.end();
 
       if (needNext1 || needNext2) {
         // Find a face adjacent to current that leads to next edge
         for (Face adjFace : currentFace.adjacentFaces()) {
           if (usedFaces.find(adjFace) != usedFaces.end()) continue;
-          if (!adjFace.isInterior()) continue;
 
           // Check if this face touches the next edge
           bool touchesNext = false;
@@ -728,7 +729,6 @@ std::vector<Face> buildFaceStrip(
     // Find a face containing end that is adjacent to the last face
     for (Face f : end.adjacentFaces()) {
       if (usedFaces.find(f) != usedFaces.end()) continue;
-      if (!f.isInterior()) continue;
 
       if (faces.empty()) {
         faces.push_back(f);
