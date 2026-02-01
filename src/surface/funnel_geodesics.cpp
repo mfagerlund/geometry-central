@@ -1,6 +1,13 @@
 #include "geometrycentral/surface/funnel_geodesics.h"
 #include "geometrycentral/surface/mesh_graph_algorithms.h"
 
+#include <cmath>
+#include <set>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 namespace geometrycentral {
 namespace surface {
 
@@ -122,76 +129,467 @@ std::vector<Vector3> FunnelGeodesicPath::getPathPolyline3D() const {
 namespace funnel_internal {
 
 // ----------------------------------------------------------------------------
+// Helper: Circle intersection for 2D unfolding
+// Given two circles centered at c1 (radius r1) and c2 (radius r2),
+// return the intersection point on the opposite side from refPoint.
+// ----------------------------------------------------------------------------
+static Vector2 circleIntersect(Vector2 c1, double r1, Vector2 c2, double r2, Vector2 refPoint) {
+  double dx = c2.x - c1.x;
+  double dy = c2.y - c1.y;
+  double d = std::sqrt(dx * dx + dy * dy);
+
+  if (d < 1e-14) {
+    return Vector2{c1.x + r1, c1.y};
+  }
+
+  // Handle non-intersecting circles (degenerate case)
+  if (d > r1 + r2 + 1e-10 || d < std::abs(r1 - r2) - 1e-10) {
+    return Vector2{c1.x + dx / d * r1, c1.y + dy / d * r1};
+  }
+
+  // Standard circle intersection formula
+  double a = (r1 * r1 - r2 * r2 + d * d) / (2.0 * d);
+  double hSq = r1 * r1 - a * a;
+  if (hSq < 0) hSq = 0;
+  double h = std::sqrt(hSq);
+
+  double invD = 1.0 / d;
+  double dirX = dx * invD;
+  double dirY = dy * invD;
+  double midX = c1.x + dirX * a;
+  double midY = c1.y + dirY * a;
+
+  if (h < 1e-10) {
+    return Vector2{midX, midY};
+  }
+
+  double perpX = -dirY * h;
+  double perpY = dirX * h;
+
+  double p1X = midX + perpX;
+  double p1Y = midY + perpY;
+
+  // Pick the side opposite to refPoint
+  double refSide = dx * (refPoint.y - c1.y) - dy * (refPoint.x - c1.x);
+  double p1Side = dx * (p1Y - c1.y) - dy * (p1X - c1.x);
+
+  if (p1Side * refSide < 0) {
+    return Vector2{p1X, p1Y};
+  } else {
+    return Vector2{midX - perpX, midY - perpY};
+  }
+}
+
+// Helper: Circle intersection picking positive Y side (for first face)
+static Vector2 circleIntersectPositiveY(Vector2 c1, double r1, Vector2 c2, double r2) {
+  double dx = c2.x - c1.x;
+  double dy = c2.y - c1.y;
+  double d = std::sqrt(dx * dx + dy * dy);
+
+  if (d < 1e-14) {
+    return Vector2{c1.x + r1, c1.y};
+  }
+
+  if (d > r1 + r2 + 1e-10 || d < std::abs(r1 - r2) - 1e-10) {
+    return Vector2{c1.x + dx / d * r1, c1.y + dy / d * r1};
+  }
+
+  double a = (r1 * r1 - r2 * r2 + d * d) / (2.0 * d);
+  double hSq = r1 * r1 - a * a;
+  if (hSq < 0) hSq = 0;
+  double h = std::sqrt(hSq);
+
+  double invD = 1.0 / d;
+  double dirX = dx * invD;
+  double dirY = dy * invD;
+  double midX = c1.x + dirX * a;
+  double midY = c1.y + dirY * a;
+
+  if (h < 1e-10) {
+    return Vector2{midX, midY};
+  }
+
+  double perpX = -dirY * h;
+  double perpY = dirX * h;
+
+  // Pick positive Y
+  return Vector2{midX + perpX, midY + perpY};
+}
+
+// ----------------------------------------------------------------------------
 // Phase 1: Flatten sleeve to 2D
+// Port of FunnelAlgorithm.FlattenFaceStripD() from C#
 // ----------------------------------------------------------------------------
 VertexData<Vector2> flattenSleeve(
     const std::vector<Face>& faces,
     Vertex entry,
     VertexPositionGeometry& geom) {
 
-  // TODO: Implement - Port from FunnelAlgorithm.FlattenFaceStripD()
-  //
-  // Algorithm:
-  // 1. Place entry vertex at origin (0,0)
-  // 2. Place first edge along +X axis
-  // 3. For each subsequent face, unfold using edge lengths and angles
-  // 4. Use double precision throughout
-
   VertexData<Vector2> flatPos(geom.mesh, Vector2::zero());
 
-  // STUB: Return empty for now
+  if (faces.empty()) {
+    return flatPos;
+  }
+
+  // Get 3D vertex positions
+  const VertexData<Vector3>& positions = geom.vertexPositions;
+
+  // Flatten first face with entry vertex at origin
+  Face firstFace = faces[0];
+  Halfedge he = firstFace.halfedge();
+  Vertex v0, v1, v2;
+
+  // Find the entry vertex and order the other two
+  if (he.vertex() == entry) {
+    v0 = he.vertex();
+    v1 = he.next().vertex();
+    v2 = he.next().next().vertex();
+  } else if (he.next().vertex() == entry) {
+    v0 = he.next().vertex();
+    v1 = he.next().next().vertex();
+    v2 = he.vertex();
+  } else {
+    v0 = he.next().next().vertex();
+    v1 = he.vertex();
+    v2 = he.next().vertex();
+  }
+
+  // Place v0 at origin, v1 along +X axis
+  Vector2 p0 = Vector2::zero();
+  double d01 = (positions[v0] - positions[v1]).norm();
+  Vector2 p1 = Vector2{d01, 0};
+
+  // Place v2 using circle intersection (positive Y side)
+  double r02 = (positions[v0] - positions[v2]).norm();
+  double r12 = (positions[v1] - positions[v2]).norm();
+  Vector2 p2 = circleIntersectPositiveY(p0, r02, p1, r12);
+
+  flatPos[v0] = p0;
+  flatPos[v1] = p1;
+  flatPos[v2] = p2;
+
+  if (faces.size() == 1) {
+    return flatPos;
+  }
+
+  // Determine initial reference point (the vertex that "falls off" from face 0 to face 1)
+  Face face1 = faces[1];
+  Halfedge f1he = face1.halfedge();
+  Vertex f1v0 = f1he.vertex();
+  Vertex f1v1 = f1he.next().vertex();
+  Vertex f1v2 = f1he.next().next().vertex();
+
+  bool v0InF1 = (v0 == f1v0 || v0 == f1v1 || v0 == f1v2);
+  bool v1InF1 = (v1 == f1v0 || v1 == f1v1 || v1 == f1v2);
+
+  Vector2 refPos;
+  if (!v0InF1) refPos = p0;
+  else if (!v1InF1) refPos = p1;
+  else refPos = p2;
+
+  // Process remaining faces
+  for (size_t i = 1; i < faces.size(); i++) {
+    Face face = faces[i];
+    Halfedge fhe = face.halfedge();
+    Vertex fv0 = fhe.vertex();
+    Vertex fv1 = fhe.next().vertex();
+    Vertex fv2 = fhe.next().next().vertex();
+
+    // Find which vertex is new (not yet positioned)
+    bool fv0Known = (flatPos[fv0] != Vector2::zero() || fv0 == entry);
+    bool fv1Known = (flatPos[fv1] != Vector2::zero() || fv1 == entry);
+    bool fv2Known = (flatPos[fv2] != Vector2::zero() || fv2 == entry);
+
+    // More robust check: see if vertex appears in any previous face
+    for (size_t j = 0; j < i && (!fv0Known || !fv1Known || !fv2Known); j++) {
+      Face prevFace = faces[j];
+      for (Vertex v : prevFace.adjacentVertices()) {
+        if (v == fv0) fv0Known = true;
+        if (v == fv1) fv1Known = true;
+        if (v == fv2) fv2Known = true;
+      }
+    }
+
+    Vertex newVert;
+    Vertex hinge1, hinge2;
+
+    if (!fv0Known) {
+      newVert = fv0;
+      hinge1 = fv1;
+      hinge2 = fv2;
+    } else if (!fv1Known) {
+      newVert = fv1;
+      hinge1 = fv0;
+      hinge2 = fv2;
+    } else if (!fv2Known) {
+      newVert = fv2;
+      hinge1 = fv0;
+      hinge2 = fv1;
+    } else {
+      // All three vertices already known - skip
+      continue;
+    }
+
+    // Compute new vertex position using circle intersection
+    Vector2 h1Pos = flatPos[hinge1];
+    Vector2 h2Pos = flatPos[hinge2];
+    double r1 = (positions[hinge1] - positions[newVert]).norm();
+    double r2 = (positions[hinge2] - positions[newVert]).norm();
+
+    Vector2 newPos = circleIntersect(h1Pos, r1, h2Pos, r2, refPos);
+    flatPos[newVert] = newPos;
+
+    // Update refPos for next iteration: find vertex that "falls off"
+    if (i + 1 < faces.size()) {
+      Face nextFace = faces[i + 1];
+      Halfedge nhe = nextFace.halfedge();
+      Vertex nv0 = nhe.vertex();
+      Vertex nv1 = nhe.next().vertex();
+      Vertex nv2 = nhe.next().next().vertex();
+
+      bool fv0InNext = (fv0 == nv0 || fv0 == nv1 || fv0 == nv2);
+      bool fv1InNext = (fv1 == nv0 || fv1 == nv1 || fv1 == nv2);
+      bool fv2InNext = (fv2 == nv0 || fv2 == nv1 || fv2 == nv2);
+
+      if (!fv0InNext) refPos = flatPos[fv0];
+      else if (!fv1InNext) refPos = flatPos[fv1];
+      else if (!fv2InNext) refPos = flatPos[fv2];
+    }
+  }
+
   return flatPos;
 }
 
 // ----------------------------------------------------------------------------
 // Phase 2: Build portals
+// Port of Sleeve.BuildPortalsFullList() from C#
 // ----------------------------------------------------------------------------
 std::vector<Portal> buildPortals(
     const std::vector<Face>& faces,
     const VertexData<Vector2>& flatPos) {
 
-  // TODO: Implement - Port from Sleeve.BuildPortalsList()
-  //
-  // Algorithm:
-  // 1. For each pair of adjacent faces, find shared edge
-  // 2. Determine left/right based on sleeve traversal direction
-  // 3. Store 2D positions from flatPos
-
   std::vector<Portal> portals;
 
-  // STUB: Return empty for now
+  if (faces.size() < 2) {
+    return portals;
+  }
+
+  portals.reserve(faces.size() - 1);
+
+  // Find entry vertex (the one at origin)
+  Vertex entryVert;
+  for (Vertex v : faces[0].adjacentVertices()) {
+    if (flatPos[v].norm() < 1e-10) {
+      entryVert = v;
+      break;
+    }
+  }
+  Vector2 prevPoint = flatPos[entryVert];
+
+  for (size_t i = 0; i < faces.size() - 1; i++) {
+    Face currentFace = faces[i];
+    Face nextFace = faces[i + 1];
+
+    // Find shared halfedge
+    Halfedge sharedHe;
+    bool found = false;
+    for (Halfedge he : currentFace.adjacentHalfedges()) {
+      if (he.twin().face() == nextFace) {
+        sharedHe = he;
+        found = true;
+        break;
+      }
+    }
+
+    if (!found) {
+      // Faces not adjacent - this shouldn't happen in a valid sleeve
+      continue;
+    }
+
+    Vertex v1 = sharedHe.vertex();
+    Vertex v2 = sharedHe.twin().vertex();
+
+    Vector2 p1 = flatPos[v1];
+    Vector2 p2 = flatPos[v2];
+
+    // Determine left/right based on travel direction
+    Vector2 mid = (p1 + p2) * 0.5;
+    Vector2 dir = mid - prevPoint;
+    double dirLen = dir.norm();
+    if (dirLen > 1e-10) {
+      dir = dir / dirLen;
+    }
+
+    // Cross product to determine which side each vertex is on
+    double cross1 = dir.x * (p1.y - prevPoint.y) - dir.y * (p1.x - prevPoint.x);
+    double cross2 = dir.x * (p2.y - prevPoint.y) - dir.y * (p2.x - prevPoint.x);
+
+    Portal portal;
+    if (cross1 > cross2) {
+      portal.left = p1;
+      portal.right = p2;
+      portal.leftVert = v1;
+      portal.rightVert = v2;
+    } else {
+      portal.left = p2;
+      portal.right = p1;
+      portal.leftVert = v2;
+      portal.rightVert = v1;
+    }
+    portals.push_back(portal);
+
+    prevPoint = mid;
+  }
+
   return portals;
 }
 
 // ----------------------------------------------------------------------------
+// Helper: Signed triangle area (2x area, used for orientation tests)
+// Positive = counter-clockwise, negative = clockwise
+// ----------------------------------------------------------------------------
+static inline double triArea2D(Vector2 a, Vector2 b, Vector2 c) {
+  return (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
+}
+
+// ----------------------------------------------------------------------------
 // Phase 3: Funnel algorithm
+// Port of FunnelAlgorithm.PopulateEager() from C# (simplified version)
+// Lee-Preparata algorithm for shortest path through a simple polygon
 // ----------------------------------------------------------------------------
 FunnelResult runFunnel(
     const std::vector<Portal>& portals,
     Vector2 entry,
     Vector2 exit) {
 
-  // TODO: Implement - Port from FunnelAlgorithm.Populate()
-  //
-  // Algorithm (Lee-Preparata):
-  // 1. Initialize funnel apex at entry
-  // 2. For each portal:
-  //    - Try to narrow left edge
-  //    - Try to narrow right edge
-  //    - If funnel inverts, emit waypoint and restart
-  // 3. Connect to exit
+  const double CROSS_EPS = 1e-6;
 
   FunnelResult result;
   result.distance = 0.0;
 
-  // STUB: Direct distance for now
-  result.distance = (exit - entry).norm();
+  // Trivial case: no portals
+  if (portals.empty()) {
+    result.waypoints2D.push_back(entry);
+    result.waypoints2D.push_back(exit);
+    result.distance = (exit - entry).norm();
+    return result;
+  }
 
+  std::vector<Vector2> path2D;
+  path2D.push_back(entry);
+
+  Vector2 apex = entry;
+
+  // Initialize funnel from first portal
+  Vector2 leftPos = portals[0].left;
+  Vector2 rightPos = portals[0].right;
+  Vertex leftVertex = portals[0].leftVert;
+  Vertex rightVertex = portals[0].rightVert;
+  size_t leftIndex = 0;
+  size_t rightIndex = 0;
+
+  for (size_t i = 1; i <= portals.size(); i++) {
+    Vector2 newLeft, newRight;
+    Vertex newLeftVertex, newRightVertex;
+
+    if (i < portals.size()) {
+      newLeft = portals[i].left;
+      newRight = portals[i].right;
+      newLeftVertex = portals[i].leftVert;
+      newRightVertex = portals[i].rightVert;
+    } else {
+      // Final "portal" is the exit point
+      newLeft = exit;
+      newRight = exit;
+      newLeftVertex = Vertex();
+      newRightVertex = Vertex();
+    }
+
+    // Check if funnel is pinched (left == right)
+    bool isPinched = (leftPos.x == rightPos.x && leftPos.y == rightPos.y);
+
+    // Check right side narrowing
+    double rightNarrowCheck = triArea2D(apex, rightPos, newRight);
+    if (rightNarrowCheck >= -CROSS_EPS) {
+      bool rightNotNarrowing = (newRight.x == rightPos.x && newRight.y == rightPos.y);
+      double leftCross = triArea2D(apex, leftPos, newRight);
+
+      if (isPinched || rightNotNarrowing ||
+          (apex.x == rightPos.x && apex.y == rightPos.y) ||
+          leftCross <= CROSS_EPS) {
+        // Just update right edge
+        rightPos = newRight;
+        rightVertex = newRightVertex;
+        rightIndex = i;
+      } else {
+        // Funnel closes on left side - add waypoint at left vertex
+        result.waypoints2D.push_back(leftPos);
+        result.waypointVertices.push_back(leftVertex);
+        path2D.push_back(leftPos);
+
+        apex = leftPos;
+        i = leftIndex;
+
+        if (i + 1 < portals.size()) {
+          leftPos = portals[i + 1].left;
+          rightPos = portals[i + 1].right;
+          leftVertex = portals[i + 1].leftVert;
+          rightVertex = portals[i + 1].rightVert;
+        }
+        leftIndex = rightIndex = i + 1;
+        continue;
+      }
+    }
+
+    // Check left side narrowing
+    double leftNarrow = triArea2D(apex, leftPos, newLeft);
+    if (leftNarrow <= CROSS_EPS) {
+      double rightCross = triArea2D(apex, rightPos, newLeft);
+      bool leftNotNarrowing = (newLeft.x == leftPos.x && newLeft.y == leftPos.y);
+
+      if (isPinched || leftNotNarrowing ||
+          (apex.x == leftPos.x && apex.y == leftPos.y) ||
+          rightCross >= -CROSS_EPS) {
+        // Just update left edge
+        leftPos = newLeft;
+        leftVertex = newLeftVertex;
+        leftIndex = i;
+      } else {
+        // Funnel closes on right side - add waypoint at right vertex
+        result.waypoints2D.push_back(rightPos);
+        result.waypointVertices.push_back(rightVertex);
+        path2D.push_back(rightPos);
+
+        apex = rightPos;
+        i = rightIndex;
+
+        if (i + 1 < portals.size()) {
+          leftPos = portals[i + 1].left;
+          rightPos = portals[i + 1].right;
+          leftVertex = portals[i + 1].leftVert;
+          rightVertex = portals[i + 1].rightVert;
+        }
+        leftIndex = rightIndex = i + 1;
+        continue;
+      }
+    }
+  }
+
+  path2D.push_back(exit);
+
+  // Compute total distance
+  double distance = 0.0;
+  for (size_t i = 0; i < path2D.size() - 1; i++) {
+    distance += (path2D[i + 1] - path2D[i]).norm();
+  }
+
+  result.distance = distance;
   return result;
 }
 
 // ----------------------------------------------------------------------------
 // Phase 4: Build face strip from Dijkstra path
+// Converts a halfedge path into an ordered face strip suitable for funnel algorithm
 // ----------------------------------------------------------------------------
 std::vector<Face> buildFaceStrip(
     ManifoldSurfaceMesh& mesh,
@@ -199,99 +597,419 @@ std::vector<Face> buildFaceStrip(
     Vertex start,
     Vertex end) {
 
-  // TODO: Implement - Port from FaceStripBuilder.FindSleeve()
-  //
-  // Algorithm:
-  // 1. Run Dijkstra to get vertex path (use shortestEdgePath from geometry-central)
-  // 2. Collect faces adjacent to path edges
-  // 3. Order and deduplicate
-
   std::vector<Face> faces;
 
   // Use geometry-central's existing Dijkstra
   std::vector<Halfedge> edgePath = shortestEdgePath(geom, start, end);
 
   if (edgePath.empty()) {
-    return faces;  // No path found
+    // start and end might be the same vertex or on the same face
+    // Try to find a face containing both
+    for (Face f : start.adjacentFaces()) {
+      for (Vertex v : f.adjacentVertices()) {
+        if (v == end) {
+          faces.push_back(f);
+          return faces;
+        }
+      }
+    }
+    return faces;
   }
 
-  // STUB: Collect faces touching the path
-  std::set<Face> faceSet;
-  for (Halfedge he : edgePath) {
-    faceSet.insert(he.face());
-    if (!he.twin().isInterior()) continue;
-    faceSet.insert(he.twin().face());
+  // Build ordered face strip from edge path
+  // For each edge in the path, we pick one of its two adjacent faces
+  // We want to create a connected strip where consecutive faces share an edge
+
+  std::set<Face> usedFaces;
+
+  // Start with the first edge's face
+  Face currentFace = edgePath[0].face();
+  if (!currentFace.isInterior()) {
+    currentFace = edgePath[0].twin().face();
+  }
+  faces.push_back(currentFace);
+  usedFaces.insert(currentFace);
+
+  // Process each edge in the path
+  for (size_t i = 0; i < edgePath.size(); i++) {
+    Halfedge he = edgePath[i];
+
+    // Get the two faces adjacent to this edge
+    Face f1 = he.face();
+    Face f2 = he.twin().isInterior() ? he.twin().face() : Face();
+
+    // Add faces that touch this edge and are adjacent to current face
+    if (f1.isInterior() && f1 != currentFace && usedFaces.find(f1) == usedFaces.end()) {
+      // Check if f1 is adjacent to currentFace
+      bool adjacent = false;
+      for (Halfedge cfhe : currentFace.adjacentHalfedges()) {
+        if (cfhe.twin().face() == f1) {
+          adjacent = true;
+          break;
+        }
+      }
+      if (adjacent) {
+        faces.push_back(f1);
+        usedFaces.insert(f1);
+        currentFace = f1;
+      }
+    }
+
+    if (f2.isInterior() && f2 != currentFace && usedFaces.find(f2) == usedFaces.end()) {
+      bool adjacent = false;
+      for (Halfedge cfhe : currentFace.adjacentHalfedges()) {
+        if (cfhe.twin().face() == f2) {
+          adjacent = true;
+          break;
+        }
+      }
+      if (adjacent) {
+        faces.push_back(f2);
+        usedFaces.insert(f2);
+        currentFace = f2;
+      }
+    }
+
+    // If we need to get to the other side of this edge, add it
+    if (i + 1 < edgePath.size()) {
+      Halfedge nextHe = edgePath[i + 1];
+      Face nextFace1 = nextHe.face();
+      Face nextFace2 = nextHe.twin().isInterior() ? nextHe.twin().face() : Face();
+
+      // Check if we need to cross to a face on the next edge
+      bool needNext1 = nextFace1.isInterior() && usedFaces.find(nextFace1) == usedFaces.end();
+      bool needNext2 = nextFace2.isInterior() && usedFaces.find(nextFace2) == usedFaces.end();
+
+      if (needNext1 || needNext2) {
+        // Find a face adjacent to current that leads to next edge
+        for (Face adjFace : currentFace.adjacentFaces()) {
+          if (usedFaces.find(adjFace) != usedFaces.end()) continue;
+          if (!adjFace.isInterior()) continue;
+
+          // Check if this face touches the next edge
+          bool touchesNext = false;
+          for (Halfedge afhe : adjFace.adjacentHalfedges()) {
+            if (afhe.edge() == nextHe.edge()) {
+              touchesNext = true;
+              break;
+            }
+          }
+
+          if (touchesNext) {
+            faces.push_back(adjFace);
+            usedFaces.insert(adjFace);
+            currentFace = adjFace;
+            break;
+          }
+        }
+      }
+    }
   }
 
-  faces.assign(faceSet.begin(), faceSet.end());
-  // TODO: Order faces properly along the path
+  // Ensure the last face contains the end vertex
+  bool lastFaceHasEnd = false;
+  if (!faces.empty()) {
+    for (Vertex v : faces.back().adjacentVertices()) {
+      if (v == end) {
+        lastFaceHasEnd = true;
+        break;
+      }
+    }
+  }
+
+  if (!lastFaceHasEnd) {
+    // Find a face containing end that is adjacent to the last face
+    for (Face f : end.adjacentFaces()) {
+      if (usedFaces.find(f) != usedFaces.end()) continue;
+      if (!f.isInterior()) continue;
+
+      if (faces.empty()) {
+        faces.push_back(f);
+        break;
+      }
+
+      // Check if adjacent to last face
+      bool adjacent = false;
+      for (Halfedge lfhe : faces.back().adjacentHalfedges()) {
+        if (lfhe.twin().face() == f) {
+          adjacent = true;
+          break;
+        }
+      }
+      if (adjacent) {
+        faces.push_back(f);
+        break;
+      }
+    }
+  }
 
   return faces;
 }
 
 // ----------------------------------------------------------------------------
 // Phase 5: Analyze corners
+// Port of WaypointCornerAnalyzer.Populate() from C#
 // ----------------------------------------------------------------------------
 std::vector<WaypointCorner> analyzeCorners(
     const std::vector<Face>& faces,
     const FunnelResult& funnel,
     const VertexData<Vector2>& flatPos) {
 
-  // TODO: Implement - Port from WaypointCornerAnalyzer.Populate()
-  //
-  // Algorithm:
-  // 1. For each interior waypoint vertex
-  // 2. Compute angle in 2D (from prev waypoint, through this, to next)
-  // 3. angleError = 180 - angle (deviation from straight)
-  // 4. wantsToFlip if angleError > threshold
-
   std::vector<WaypointCorner> corners;
 
-  // STUB: Return empty for now
+  if (funnel.waypointVertices.empty()) {
+    return corners;
+  }
+
+  const double RAD_TO_DEG = 180.0 / M_PI;
+
+  // Build path2D: [entry, wp0, wp1, ..., wpN, exit]
+  // We need this to compute angles
+  std::vector<Vector2> path2D;
+
+  // Get entry position (the vertex at origin)
+  for (Vertex v : faces[0].adjacentVertices()) {
+    if (flatPos[v].norm() < 1e-10) {
+      path2D.push_back(flatPos[v]);
+      break;
+    }
+  }
+
+  // Add waypoint positions
+  for (size_t i = 0; i < funnel.waypoints2D.size(); i++) {
+    path2D.push_back(funnel.waypoints2D[i]);
+  }
+
+  // Get exit position (vertex in last face that has largest distance from entry)
+  Vector2 entry2D = path2D[0];
+  Vertex exitVert;
+  double maxDist = -1;
+  for (Vertex v : faces.back().adjacentVertices()) {
+    double d = (flatPos[v] - entry2D).norm();
+    if (d > maxDist) {
+      maxDist = d;
+      exitVert = v;
+    }
+  }
+  path2D.push_back(flatPos[exitVert]);
+
+  // Analyze each waypoint
+  for (size_t i = 0; i < funnel.waypointVertices.size(); i++) {
+    Vertex vertex = funnel.waypointVertices[i];
+
+    // Get positions in path: prev -> waypoint -> next
+    // Path2D is: [entry, wp0, wp1, ..., wpN, exit]
+    Vector2 prev = path2D[i];
+    Vector2 curr = funnel.waypoints2D[i];
+    Vector2 next = path2D[i + 2];
+
+    // Compute turn angle error
+    Vector2 incoming = curr - prev;
+    Vector2 outgoing = next - curr;
+    double cross = incoming.x * outgoing.y - incoming.y * outgoing.x;
+    double dot = incoming.x * outgoing.x + incoming.y * outgoing.y;
+    double signedAngleRad = std::atan2(cross, dot);
+    double angleErrorDeg = std::abs(signedAngleRad * RAD_TO_DEG);
+
+    WaypointCorner corner;
+    corner.vertex = vertex;
+    corner.faceIndex = 0;  // TODO: Find actual face index
+    corner.angleErrorDeg = angleErrorDeg;
+
+    // Find which face in the strip contains this vertex
+    for (size_t j = 0; j < faces.size(); j++) {
+      for (Vertex v : faces[j].adjacentVertices()) {
+        if (v == vertex) {
+          corner.faceIndex = j;
+          break;
+        }
+      }
+    }
+
+    corners.push_back(corner);
+  }
+
   return corners;
 }
 
 // ----------------------------------------------------------------------------
+// Helper: Walk halfedge fan around a vertex until reaching exitFace
+// ----------------------------------------------------------------------------
+static std::vector<Face> walkFan(Halfedge startHe, Face exitFace, bool usePrev = true) {
+  std::vector<Face> result;
+  Halfedge current = startHe;
+
+  for (int step = 0; step < 50; step++) {
+    if (!current.isInterior()) break;
+
+    Face face = current.face();
+    if (face == exitFace) {
+      return result;
+    }
+
+    result.push_back(face);
+
+    Halfedge neighbor = usePrev ? current.next().next() : current.next();
+    Halfedge twin = neighbor.twin();
+    if (!twin.isInterior()) break;
+    current = twin;
+  }
+
+  return result;
+}
+
+// ----------------------------------------------------------------------------
 // Phase 6: Compute flip action
+// Port of WaypointCornerFlipAction.Compute() from C#
 // ----------------------------------------------------------------------------
 FlipAction computeFlipAction(
     const std::vector<Face>& faces,
     const WaypointCorner& corner,
     ManifoldSurfaceMesh& mesh) {
 
-  // TODO: Implement - Port from WaypointCornerFlipAction.Compute()
-  //
-  // Algorithm:
-  // 1. At corner vertex, identify the "wedge" on the short side of the path
-  // 2. removeFaces = faces in sleeve that are in the wedge
-  // 3. addFaces = faces on opposite side of wedge
-  // 4. canFlip = false if we hit mesh boundary
-
   FlipAction action;
   action.canFlip = false;
 
-  // STUB: Return non-flippable for now
+  Vertex vertex = corner.vertex;
+
+  // Boundary vertices cannot be flipped
+  if (vertex.isBoundary()) {
+    return action;
+  }
+
+  // Find entry/exit faces - the faces before and after the corner vertex in the sleeve
+  size_t faceIndex = corner.faceIndex;
+
+  // Find the first and last face in the sleeve that contains this vertex
+  size_t firstFaceWithVertex = faces.size();
+  size_t lastFaceWithVertex = 0;
+  for (size_t i = 0; i < faces.size(); i++) {
+    for (Vertex v : faces[i].adjacentVertices()) {
+      if (v == vertex) {
+        if (i < firstFaceWithVertex) firstFaceWithVertex = i;
+        if (i > lastFaceWithVertex) lastFaceWithVertex = i;
+        break;
+      }
+    }
+  }
+
+  if (firstFaceWithVertex >= faces.size() || lastFaceWithVertex < firstFaceWithVertex) {
+    return action;
+  }
+
+  Face entryFace = faces[firstFaceWithVertex];
+  Face exitFace = faces[std::min(lastFaceWithVertex + 1, faces.size() - 1)];
+
+  // If there are no faces strictly between entry and exit, no flip possible
+  if (lastFaceWithVertex <= firstFaceWithVertex) {
+    return action;
+  }
+
+  // RemoveFaces = faces strictly between entry and exit that contain this vertex
+  for (size_t i = firstFaceWithVertex + 1; i <= lastFaceWithVertex; i++) {
+    action.removeFaces.push_back(faces[i]);
+  }
+
+  if (action.removeFaces.empty()) {
+    return action;
+  }
+
+  // Find the halfedge in entry face that points TO the vertex
+  Halfedge heToVertex;
+  bool foundHe = false;
+  for (Halfedge he : entryFace.adjacentHalfedges()) {
+    if (he.next().vertex() == vertex) {
+      heToVertex = he;
+      foundHe = true;
+      break;
+    }
+  }
+
+  if (!foundHe) {
+    return action;
+  }
+
+  // Walk both directions of the fan from entry toward exit
+  std::vector<Face> walkA = walkFan(heToVertex.twin(), exitFace, true);
+  std::vector<Face> walkB = walkFan(heToVertex.next().twin(), exitFace, false);
+
+  // AddFaces = the fan walk that does NOT overlap with removeFaces
+  std::set<Face> removeFaceSet(action.removeFaces.begin(), action.removeFaces.end());
+
+  bool aOverlapsRemove = false;
+  for (Face f : walkA) {
+    if (removeFaceSet.count(f)) {
+      aOverlapsRemove = true;
+      break;
+    }
+  }
+
+  bool bOverlapsRemove = false;
+  for (Face f : walkB) {
+    if (removeFaceSet.count(f)) {
+      bOverlapsRemove = true;
+      break;
+    }
+  }
+
+  if (!aOverlapsRemove && !walkA.empty()) {
+    action.addFaces = walkA;
+    action.canFlip = true;
+  } else if (!bOverlapsRemove && !walkB.empty()) {
+    action.addFaces = walkB;
+    action.canFlip = true;
+  }
+
   return action;
 }
 
 // ----------------------------------------------------------------------------
 // Phase 7: Apply flip
+// Port of Sleeve.ComputeNewFaces() from C#
 // ----------------------------------------------------------------------------
 std::vector<Face> applyFlip(
     const std::vector<Face>& faces,
     const FlipAction& action) {
 
-  // TODO: Implement - Port from Sleeve.ApplyFlip() (simple rebuild path)
-  //
-  // Algorithm:
-  // 1. Find position of removeFaces in the face list
-  // 2. Remove them
-  // 3. Insert addFaces at same position
-  // 4. Return new list
+  if (!action.canFlip || action.removeFaces.empty()) {
+    return faces;
+  }
 
-  std::vector<Face> newFaces = faces;
+  // Build set of faces to remove
+  std::set<Face> removeFaceSet(action.removeFaces.begin(), action.removeFaces.end());
 
-  // STUB: Return unchanged for now
+  // Find splice boundaries
+  int firstRemoveIdx = -1;
+  int lastRemoveIdx = -1;
+  for (size_t i = 0; i < faces.size(); i++) {
+    if (removeFaceSet.count(faces[i])) {
+      if (firstRemoveIdx < 0) firstRemoveIdx = static_cast<int>(i);
+      lastRemoveIdx = static_cast<int>(i);
+    }
+  }
+
+  if (firstRemoveIdx < 0) {
+    return faces;  // Nothing to remove
+  }
+
+  std::vector<Face> newFaces;
+  newFaces.reserve(faces.size() - action.removeFaces.size() + action.addFaces.size());
+
+  // Prefix: faces before first remove
+  for (int i = 0; i < firstRemoveIdx; i++) {
+    newFaces.push_back(faces[i]);
+  }
+
+  // Add replacement faces
+  for (Face f : action.addFaces) {
+    newFaces.push_back(f);
+  }
+
+  // Suffix: faces after last remove
+  for (size_t i = lastRemoveIdx + 1; i < faces.size(); i++) {
+    newFaces.push_back(faces[i]);
+  }
+
   return newFaces;
 }
 
