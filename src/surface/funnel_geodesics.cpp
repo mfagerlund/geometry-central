@@ -106,13 +106,16 @@ std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
   // Each phase tries all corners; phases repeat until no improvement.
   // This guarantees local optimality: if any single flip could improve the path,
   // we would have found it.
-  std::set<size_t> rejectedThisPhase;
+  //
+  // Use phase-stamped array instead of std::set for O(1) lookups
+  // Start phase at 1 so initial check (rejectedPhase[idx] != phase) works correctly
+  std::vector<uint32_t> rejectedPhase(mesh.nVertices(), 0);
   const size_t maxIters = 20000;
   const double minImprovement = 0.00001;
   const double negligibleImprovement = 0.0001;
 
   size_t iteration = 0;
-  int phase = 0;
+  uint32_t phase = 1;
 
   // Initial analysis
   auto corners = funnel_internal::analyzeCorners(result->sleeveFaces, funnel, flatPos);
@@ -120,7 +123,7 @@ std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
   // Helper lambda to check if there are flippable corners
   auto hasFlippableCorners = [&]() {
     for (const auto& c : corners) {
-      if (c.wantsToFlip() && !rejectedThisPhase.count(c.vertex.getIndex())) {
+      if (c.wantsToFlip() && rejectedPhase[c.vertex.getIndex()] != phase) {
         return true;
       }
     }
@@ -133,7 +136,7 @@ std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
     double bestError = 0;
     for (auto& c : corners) {
       if (!c.wantsToFlip()) continue;
-      if (rejectedThisPhase.count(c.vertex.getIndex())) continue;
+      if (rejectedPhase[c.vertex.getIndex()] == phase) continue;
       if (c.angleErrorDeg > bestError) {
         best = &c;
         bestError = c.angleErrorDeg;
@@ -148,9 +151,8 @@ std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
   } else {
     // Main optimization loop
     while (iteration < maxIters) {
-      phase++;
+      phase++;  // Incrementing phase implicitly "clears" rejectedPhase for this phase
       double phaseStartDistance = funnel.distance;
-      rejectedThisPhase.clear();
 
       // Run one phase - try all corners until none want to flip (or are all rejected)
       while (iteration < maxIters) {
@@ -164,7 +166,7 @@ std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
         auto action = funnel_internal::computeFlipAction(result->sleeveFaces, *cornerToFlip, mesh);
         if (!action.canFlip) {
           // Corner can't be flipped (boundary constraint) - reject for this phase
-          rejectedThisPhase.insert(cornerToFlip->vertex.getIndex());
+          rejectedPhase[cornerToFlip->vertex.getIndex()] = phase;
           continue;
         }
 
@@ -182,7 +184,7 @@ std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
 
         if (newFunnel.distance > distanceBefore - minImprovement) {
           // Bad flip - reject for this phase (don't apply)
-          rejectedThisPhase.insert(idx);
+          rejectedPhase[idx] = phase;
           continue;
         }
 
@@ -200,7 +202,7 @@ std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
         // If improvement is negligible (< 0.0001), mark as rejected to prevent infinite loops
         // This catches cases where floating point drift causes tiny "improvements" that go nowhere
         if (actualImprovement < negligibleImprovement) {
-          rejectedThisPhase.insert(idx);
+          rejectedPhase[idx] = phase;
         }
       }
 
@@ -375,6 +377,7 @@ VertexData<Vector2> flattenSleeve(
     VertexPositionGeometry& geom) {
 
   VertexData<Vector2> flatPos(geom.mesh, Vector2::zero());
+  VertexData<char> known(geom.mesh, 0);  // Track which vertices have been positioned
 
   if (faces.empty()) {
     return flatPos;
@@ -416,6 +419,9 @@ VertexData<Vector2> flattenSleeve(
   flatPos[v0] = p0;
   flatPos[v1] = p1;
   flatPos[v2] = p2;
+  known[v0] = 1;
+  known[v1] = 1;
+  known[v2] = 1;
 
   if (faces.size() == 1) {
     return flatPos;
@@ -444,20 +450,10 @@ VertexData<Vector2> flattenSleeve(
     Vertex fv1 = fhe.next().vertex();
     Vertex fv2 = fhe.next().next().vertex();
 
-    // Find which vertex is new (not yet positioned)
-    bool fv0Known = (flatPos[fv0] != Vector2::zero() || fv0 == entry);
-    bool fv1Known = (flatPos[fv1] != Vector2::zero() || fv1 == entry);
-    bool fv2Known = (flatPos[fv2] != Vector2::zero() || fv2 == entry);
-
-    // More robust check: see if vertex appears in any previous face
-    for (size_t j = 0; j < i && (!fv0Known || !fv1Known || !fv2Known); j++) {
-      Face prevFace = faces[j];
-      for (Vertex v : prevFace.adjacentVertices()) {
-        if (v == fv0) fv0Known = true;
-        if (v == fv1) fv1Known = true;
-        if (v == fv2) fv2Known = true;
-      }
-    }
+    // Find which vertex is new (not yet positioned) - O(1) lookup via known mask
+    bool fv0Known = known[fv0];
+    bool fv1Known = known[fv1];
+    bool fv2Known = known[fv2];
 
     Vertex newVert;
     Vertex hinge1, hinge2;
@@ -487,6 +483,7 @@ VertexData<Vector2> flattenSleeve(
 
     Vector2 newPos = circleIntersect(h1Pos, r1, h2Pos, r2, refPos);
     flatPos[newVert] = newPos;
+    known[newVert] = 1;
 
     // Update refPos for next iteration: find vertex that "falls off"
     if (i + 1 < faces.size()) {

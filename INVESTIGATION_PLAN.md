@@ -33,7 +33,7 @@ Removed all investigation/research code to keep only the core algorithm:
 
 | Metric | C++ GFR | FlipOut | C# GFR | Notes |
 |--------|---------|---------|--------|-------|
-| Time | **~2180 ms** | 3476 ms | 1848 ms | **C++ 1.59x faster than FlipOut** |
+| Time | **~1221 ms** | 3476 ms | 1848 ms | **C++ 2.85x faster than FlipOut** |
 | Mean diff | -0.10% | baseline | -0.12% | GFR finds slightly shorter paths |
 | Total dist | 2602.79 | 2605.77 | 2602.67 | GFR wins by 0.11% |
 | Min diff | -7.76% | - | - | **Legitimate** - GFR closer to exact |
@@ -47,10 +47,17 @@ All paths are now valid (>= MMP exact distance).
 
 | Phase | C++ Time | Per-path |
 |-------|----------|----------|
-| A* pathfinding | ~1430 ms | 1.43 ms |
-| Flatten/Funnel | ~52 ms | 0.05 ms |
-| Straightening | ~697 ms | 0.70 ms |
-| **Total** | **~2180 ms** | **2.18 ms** |
+| A* pathfinding | ~1045 ms | 1.05 ms |
+| Flatten/Funnel | ~10 ms | 0.01 ms |
+| Straightening | ~164 ms | 0.16 ms |
+| **Total** | **~1221 ms** | **1.22 ms** |
+
+#### Optimizations Applied (2026-02-01)
+
+1. **flattenSleeve O(n²) → O(n)**: Replaced O(n²) vertex lookup scan with `VertexData<char>` known mask
+2. **Phase-stamped rejection array**: Replaced `std::set<size_t>` with `std::vector<uint32_t>` phase stamps for O(1) lookups
+
+Combined effect: 44% reduction in total time (2180ms → 1221ms)
 
 ### C++ vs C# GFR Comparison
 
