@@ -16,6 +16,36 @@
 
 #include "geometrycentral/surface/manifold_surface_mesh.h"
 #include "geometrycentral/surface/vertex_position_geometry.h"
+// C# counterparts:
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/CachedGeodesicPathfinder.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/DiscreteGeodesicPathfinder.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/DiscreteGeodesicPathfinderTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/FunnelPortalAStar.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/FunnelPortalAStarTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/HeuristicExperiment/CandidateHeuristics.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/HeuristicExperiment/HeuristicBenchmarkTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/UnfoldedPortalAStar.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/UnfoldedPortalAStarBenchmark.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/UnfoldedPortalAStarPathfinder.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/UnfoldedPortalAStarTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/UnfoldedPortalAStarVisualizer.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/VeryDiscreteGeodesicExplorer.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/VeryDiscreteGeodesicExplorerHelper.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/VeryDiscreteGeodesicOptimizationBenchmark.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/VeryDiscreteGeodesicPathfinder.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/VeryDiscreteGeodesicPathfinderTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/VeryDiscreteGeodesicTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripBadPathFinderTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripBuilder.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripBuilderTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripRegressionTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripResult.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripUtils.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripWalker.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripWalkerTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/VertexPathStep.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/VertexPathToFaceStripConverter.cs
+
 
 #include <memory>
 #include <vector>
@@ -41,32 +71,13 @@ enum class CandidateName {
 
 // ============================================================================
 // ============================================================================
-enum class BlockedReason {
-  None_,  // Can't use "None" because it conflicts
-  NotComputed,
-  F1Boundary,
-  V0FlatteningFailed,
-  ParentFaceBoundary,
-  FlatteningFailed,
-  TargetFaceBoundary,
-  PortalBlocked
-};
-
-// ============================================================================
-// ============================================================================
 struct CandidateVertex {
   CandidateName name = CandidateName::None;
-
   Vertex vertex;  // Invalid vertex means null
-
   Vector2 flatPosition = {std::numeric_limits<double>::quiet_NaN(),
                           std::numeric_limits<double>::quiet_NaN()};
-
   double distance = std::numeric_limits<double>::quiet_NaN();
-
   bool isReachable = false;
-
-  BlockedReason blocked = BlockedReason::NotComputed;
 
 
   // Helper to check if vertex is valid (not null in C# terms)

@@ -1,6 +1,36 @@
 #include "geometrycentral/surface/funnel_geodesics.h"
 #include "geometrycentral/surface/mesh_graph_algorithms.h"
 #include "geometrycentral/surface/very_discrete_geodesic.h"
+// C# counterparts:
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/CachedGreedyFunnelRefinementPathfinder.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FlipOutComparisonTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/GeodesicComparisonTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/GeodesicTestBase.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/GreedyFunnelRefinementPathfinder.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/IterativeStraightener/CornerAnalyzerRenderer.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/IterativeStraightener/InterativeStraightener.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/IterativeStraightener/InterativeStraightenerTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/IterativeStraightener/PartialFunnelRecomputationTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/IterativeStraightener/WaypointCorner.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/IterativeStraightener/WaypointCornerAnalyzer.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/IterativeStraightener/WaypointCornerAnalyzerTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/IterativeStraightener/WaypointCornerFlipAction.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/RandomPathStressTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/DepthComparisonTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/FlatVertex.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/FlipActionVisualizationTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/FlipRoundTripTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/GeodesicPathJoiner.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/Portal.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/PortalCrossing.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/ShortestEdgePathfinder.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/Sleeve.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/SleeveBadPathsFinderTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/SleeveFlipVisualizationTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/SleevePerformanceTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/SleeveRegressionTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/SleeveTests.cs
+
 
 #include <chrono>
 #include <cmath>

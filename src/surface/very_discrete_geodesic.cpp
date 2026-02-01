@@ -13,6 +13,36 @@
 //   - FaceStripUtils.cs
 
 #include "geometrycentral/surface/very_discrete_geodesic.h"
+// C# counterparts:
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/CachedGeodesicPathfinder.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/DiscreteGeodesicPathfinder.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/DiscreteGeodesicPathfinderTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/FunnelPortalAStar.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/FunnelPortalAStarTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/HeuristicExperiment/CandidateHeuristics.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/HeuristicExperiment/HeuristicBenchmarkTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/UnfoldedPortalAStar.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/UnfoldedPortalAStarBenchmark.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/UnfoldedPortalAStarPathfinder.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/UnfoldedPortalAStarTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/UnfoldedPortalAStarVisualizer.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/VeryDiscreteGeodesicExplorer.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/VeryDiscreteGeodesicExplorerHelper.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/VeryDiscreteGeodesicOptimizationBenchmark.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/VeryDiscreteGeodesicPathfinder.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/VeryDiscreteGeodesicPathfinderTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/VeryDiscreteGeodesicTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripBadPathFinderTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripBuilder.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripBuilderTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripRegressionTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripResult.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripUtils.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripWalker.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripWalkerTests.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/VertexPathStep.cs
+// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/VertexPathToFaceStripConverter.cs
+
 
 #include <cmath>
 #include <algorithm>
@@ -186,23 +216,27 @@ Vector2 getFlatPosition(Vertex v, Halfedge portal, Vector2 flatP1, Vector2 flatP
 }
 
 
-// Helper for creating blocked candidates
-static CandidateVertex makeBlockedCandidate(CandidateName name, BlockedReason reason) {
+// Helper for creating unreachable candidates
+static CandidateVertex makeUnreachable(CandidateName name) {
   CandidateVertex c;
   c.name = name;
-  c.blocked = reason;
   c.isReachable = false;
   return c;
 }
 
-static CandidateVertex makeBlockedCandidateWithVertex(CandidateName name, Vertex v, Vector2 flatPos, BlockedReason reason) {
-  CandidateVertex c;
-  c.name = name;
-  c.vertex = v;
-  c.flatPosition = flatPos;
-  c.blocked = reason;
-  c.isReachable = false;
-  return c;
+// Block all candidates in an ExplorationResult
+static void blockAllCandidates(ExplorationResult& result) {
+  result.L1 = makeUnreachable(CandidateName::L1);
+  result.L2L = makeUnreachable(CandidateName::L2L);
+  result.L2R = makeUnreachable(CandidateName::L2R);
+  result.L3L = makeUnreachable(CandidateName::L3L);
+  result.L3R = makeUnreachable(CandidateName::L3R);
+  result.L4L = makeUnreachable(CandidateName::L4L);
+  result.L4R = makeUnreachable(CandidateName::L4R);
+  result.L5L = makeUnreachable(CandidateName::L5L);
+  result.L5R = makeUnreachable(CandidateName::L5R);
+  result.L5LM = makeUnreachable(CandidateName::L5LM);
+  result.L5RM = makeUnreachable(CandidateName::L5RM);
 }
 
 // Portal pair for reachability checking
@@ -212,20 +246,14 @@ struct Portal { Vector2 a, b; };
 static CandidateVertex checkReachability(CandidateName name, Vertex vertex, Vector2 flatV0,
                                          Vector2 flatTarget, Face targetFace,
                                          const Portal* portals, size_t numPortals, double scaleTolerance) {
-  if (vertex == Vertex() || targetFace == Face()) {
-    return makeBlockedCandidate(name, BlockedReason::ParentFaceBoundary);
-  }
-  if (std::isnan(flatTarget.x)) {
-    return makeBlockedCandidateWithVertex(name, vertex, flatTarget, BlockedReason::FlatteningFailed);
-  }
-  if (targetFace.isBoundaryLoop()) {
-    return makeBlockedCandidate(name, BlockedReason::TargetFaceBoundary);
+  if (vertex == Vertex() || targetFace == Face() || std::isnan(flatTarget.x) || targetFace.isBoundaryLoop()) {
+    return makeUnreachable(name);
   }
 
   double eps = scaleTolerance * 1e-6;
   for (size_t i = 0; i < numPortals; i++) {
     if (!segmentCrossesPortal(flatV0, flatTarget, portals[i].a, portals[i].b, eps)) {
-      return makeBlockedCandidateWithVertex(name, vertex, flatTarget, BlockedReason::PortalBlocked);
+      return makeUnreachable(name);
     }
   }
 
@@ -235,7 +263,6 @@ static CandidateVertex checkReachability(CandidateName name, Vertex vertex, Vect
   c.flatPosition = flatTarget;
   c.distance = norm(flatTarget - flatV0);
   c.isReachable = true;
-  c.blocked = BlockedReason::None_;
   return c;
 }
 
@@ -297,18 +324,7 @@ ExplorationResult explore(Corner corner, VertexPositionGeometry& geom) {
                  std::numeric_limits<double>::quiet_NaN()};
 
   if (fL1Raw.isBoundaryLoop()) {
-    // All candidates blocked with F1Boundary
-    result.L1 = makeBlockedCandidate(CandidateName::L1, BlockedReason::F1Boundary);
-    result.L2L = makeBlockedCandidate(CandidateName::L2L, BlockedReason::F1Boundary);
-    result.L2R = makeBlockedCandidate(CandidateName::L2R, BlockedReason::F1Boundary);
-    result.L3L = makeBlockedCandidate(CandidateName::L3L, BlockedReason::F1Boundary);
-    result.L3R = makeBlockedCandidate(CandidateName::L3R, BlockedReason::F1Boundary);
-    result.L4L = makeBlockedCandidate(CandidateName::L4L, BlockedReason::F1Boundary);
-    result.L4R = makeBlockedCandidate(CandidateName::L4R, BlockedReason::F1Boundary);
-    result.L5L = makeBlockedCandidate(CandidateName::L5L, BlockedReason::F1Boundary);
-    result.L5R = makeBlockedCandidate(CandidateName::L5R, BlockedReason::F1Boundary);
-    result.L5LM = makeBlockedCandidate(CandidateName::L5LM, BlockedReason::F1Boundary);
-    result.L5RM = makeBlockedCandidate(CandidateName::L5RM, BlockedReason::F1Boundary);
+    blockAllCandidates(result);
     return result;
   }
 
@@ -331,18 +347,7 @@ ExplorationResult explore(Corner corner, VertexPositionGeometry& geom) {
   Vector2 flat_v0 = computeTriangleApex(flat_heL1_a, flat_heL1_b, d_v0_to_v1, d_v0_to_v2, true);
 
   if (std::isnan(flat_v0.x)) {
-    // Return blocked result with V0FlatteningFailed
-    result.L1 = makeBlockedCandidate(CandidateName::L1, BlockedReason::V0FlatteningFailed);
-    result.L2L = makeBlockedCandidate(CandidateName::L2L, BlockedReason::V0FlatteningFailed);
-    result.L2R = makeBlockedCandidate(CandidateName::L2R, BlockedReason::V0FlatteningFailed);
-    result.L3L = makeBlockedCandidate(CandidateName::L3L, BlockedReason::V0FlatteningFailed);
-    result.L3R = makeBlockedCandidate(CandidateName::L3R, BlockedReason::V0FlatteningFailed);
-    result.L4L = makeBlockedCandidate(CandidateName::L4L, BlockedReason::V0FlatteningFailed);
-    result.L4R = makeBlockedCandidate(CandidateName::L4R, BlockedReason::V0FlatteningFailed);
-    result.L5L = makeBlockedCandidate(CandidateName::L5L, BlockedReason::V0FlatteningFailed);
-    result.L5R = makeBlockedCandidate(CandidateName::L5R, BlockedReason::V0FlatteningFailed);
-    result.L5LM = makeBlockedCandidate(CandidateName::L5LM, BlockedReason::V0FlatteningFailed);
-    result.L5RM = makeBlockedCandidate(CandidateName::L5RM, BlockedReason::V0FlatteningFailed);
+    blockAllCandidates(result);
     return result;
   }
 
@@ -548,47 +553,47 @@ ExplorationResult explore(Corner corner, VertexPositionGeometry& geom) {
 
   result.L1 = computedL1
     ? checkReachability1(CandidateName::L1, vL1, flat_v0, flat_L1, fL1, flat_heL1_a, flat_heL1_b, portalLen1)
-    : makeBlockedCandidate(CandidateName::L1, BlockedReason::NotComputed);
+    : makeUnreachable(CandidateName::L1);
 
   result.L2L = computedL2L
     ? checkReachability2(CandidateName::L2L, vL2L, flat_v0, flat_L2L, fL2L, flat_heL1_a, flat_heL1_b, flat_heL2L_a, flat_heL2L_b, portalLen1)
-    : makeBlockedCandidate(CandidateName::L2L, BlockedReason::NotComputed);
+    : makeUnreachable(CandidateName::L2L);
 
   result.L3L = computedL3L
     ? checkReachability3(CandidateName::L3L, vL3L, flat_v0, flat_L3L, fL3L, flat_heL1_a, flat_heL1_b, flat_heL2L_a, flat_heL2L_b, flat_heL3L_a, flat_heL3L_b, portalLen1)
-    : makeBlockedCandidate(CandidateName::L3L, BlockedReason::NotComputed);
+    : makeUnreachable(CandidateName::L3L);
 
   result.L4L = computedL4L
     ? checkReachability4(CandidateName::L4L, vL4L, flat_v0, flat_L4L, fL4L, flat_heL1_a, flat_heL1_b, flat_heL2L_a, flat_heL2L_b, flat_heL3L_a, flat_heL3L_b, flat_heL4L_a, flat_heL4L_b, portalLen1)
-    : makeBlockedCandidate(CandidateName::L4L, BlockedReason::NotComputed);
+    : makeUnreachable(CandidateName::L4L);
 
   result.L5L = computedL5L
     ? checkReachability5(CandidateName::L5L, vL5L, flat_v0, flat_L5L, fL5L, flat_heL1_a, flat_heL1_b, flat_heL2L_a, flat_heL2L_b, flat_heL3L_a, flat_heL3L_b, flat_heL4L_a, flat_heL4L_b, flat_heL5L_a, flat_heL5L_b, portalLen1)
-    : makeBlockedCandidate(CandidateName::L5L, BlockedReason::NotComputed);
+    : makeUnreachable(CandidateName::L5L);
 
   result.L5LM = computedL5LM
     ? checkReachability5(CandidateName::L5LM, vL5LM, flat_v0, flat_L5LM, fL5LM, flat_heL1_a, flat_heL1_b, flat_heL2L_a, flat_heL2L_b, flat_heL3L_a, flat_heL3L_b, flat_heL4LM_a, flat_heL4LM_b, flat_heL5LM_a, flat_heL5LM_b, portalLen1)
-    : makeBlockedCandidate(CandidateName::L5LM, BlockedReason::NotComputed);
+    : makeUnreachable(CandidateName::L5LM);
 
   result.L2R = computedL2R
     ? checkReachability2(CandidateName::L2R, vL2R, flat_v0, flat_L2R, fL2R, flat_heL1_a, flat_heL1_b, flat_heL2R_a, flat_heL2R_b, portalLen1)
-    : makeBlockedCandidate(CandidateName::L2R, BlockedReason::NotComputed);
+    : makeUnreachable(CandidateName::L2R);
 
   result.L3R = computedL3R
     ? checkReachability3(CandidateName::L3R, vL3R, flat_v0, flat_L3R, fL3R, flat_heL1_a, flat_heL1_b, flat_heL2R_a, flat_heL2R_b, flat_heL3R_a, flat_heL3R_b, portalLen1)
-    : makeBlockedCandidate(CandidateName::L3R, BlockedReason::NotComputed);
+    : makeUnreachable(CandidateName::L3R);
 
   result.L4R = computedL4R
     ? checkReachability4(CandidateName::L4R, vL4R, flat_v0, flat_L4R, fL4R, flat_heL1_a, flat_heL1_b, flat_heL2R_a, flat_heL2R_b, flat_heL3R_a, flat_heL3R_b, flat_heL4R_a, flat_heL4R_b, portalLen1)
-    : makeBlockedCandidate(CandidateName::L4R, BlockedReason::NotComputed);
+    : makeUnreachable(CandidateName::L4R);
 
   result.L5R = computedL5R
     ? checkReachability5(CandidateName::L5R, vL5R, flat_v0, flat_L5R, fL5R, flat_heL1_a, flat_heL1_b, flat_heL2R_a, flat_heL2R_b, flat_heL3R_a, flat_heL3R_b, flat_heL4R_a, flat_heL4R_b, flat_heL5R_a, flat_heL5R_b, portalLen1)
-    : makeBlockedCandidate(CandidateName::L5R, BlockedReason::NotComputed);
+    : makeUnreachable(CandidateName::L5R);
 
   result.L5RM = computedL5RM
     ? checkReachability5(CandidateName::L5RM, vL5RM, flat_v0, flat_L5RM, fL5RM, flat_heL1_a, flat_heL1_b, flat_heL2R_a, flat_heL2R_b, flat_heL3R_a, flat_heL3R_b, flat_heL4RM_a, flat_heL4RM_b, flat_heL5RM_a, flat_heL5RM_b, portalLen1)
-    : makeBlockedCandidate(CandidateName::L5RM, BlockedReason::NotComputed);
+    : makeUnreachable(CandidateName::L5RM);
 
   return result;
 }
