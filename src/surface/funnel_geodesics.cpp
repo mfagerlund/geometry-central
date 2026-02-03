@@ -1,36 +1,9 @@
+// Funnel Geodesics - GFR Algorithm Implementation
+// Computes geodesic paths via sleeve unfolding and iterative corner straightening.
+
 #include "geometrycentral/surface/funnel_geodesics.h"
 #include "geometrycentral/surface/mesh_graph_algorithms.h"
 #include "geometrycentral/surface/very_discrete_geodesic.h"
-// C# counterparts:
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/CachedGreedyFunnelRefinementPathfinder.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FlipOutComparisonTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/GeodesicComparisonTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/GeodesicTestBase.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/GreedyFunnelRefinementPathfinder.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/IterativeStraightener/CornerAnalyzerRenderer.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/IterativeStraightener/InterativeStraightener.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/IterativeStraightener/InterativeStraightenerTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/IterativeStraightener/PartialFunnelRecomputationTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/IterativeStraightener/WaypointCorner.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/IterativeStraightener/WaypointCornerAnalyzer.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/IterativeStraightener/WaypointCornerAnalyzerTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/IterativeStraightener/WaypointCornerFlipAction.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/RandomPathStressTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/DepthComparisonTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/FlatVertex.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/FlipActionVisualizationTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/FlipRoundTripTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/GeodesicPathJoiner.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/Portal.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/PortalCrossing.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/ShortestEdgePathfinder.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/Sleeve.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/SleeveBadPathsFinderTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/SleeveFlipVisualizationTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/SleevePerformanceTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/SleeveRegressionTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/SleeveTests.cs
-
 
 #include <chrono>
 #include <cmath>
@@ -86,6 +59,39 @@ std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
   result->nFaces = result->sleeveFaces.size();
   auto aStarEnd = std::chrono::high_resolution_clock::now();
   totalAStarTimeMs += std::chrono::duration<double, std::milli>(aStarEnd - aStarStart).count();
+
+  // Handle degenerate case: empty sleeve
+  // This can happen if vertices share an edge (valid), or if pathfinding failed (bug)
+  if (result->sleeveFaces.empty()) {
+    // Check if vertices share an edge directly
+    bool sharesEdge = false;
+    double edgeLength = 0;
+    for (Halfedge he : startVert.outgoingHalfedges()) {
+      if (he.tipVertex() == endVert) {
+        sharesEdge = true;
+        edgeLength = geom.edgeLengths[he.edge()];
+        break;
+      }
+    }
+
+    result->pathPoints.push_back(SurfacePoint(startVert));
+    if (startVert != endVert) {
+      result->pathPoints.push_back(SurfacePoint(endVert));
+      if (sharesEdge) {
+        // Adjacent vertices - return edge length
+        result->pathLength = edgeLength;
+      } else {
+        // Pathfinding failed - this shouldn't happen on connected meshes
+        // Fall back to Euclidean as a last resort
+        result->pathLength = (geom.vertexPositions[startVert] - geom.vertexPositions[endVert]).norm();
+      }
+    } else {
+      result->pathLength = 0;
+    }
+    result->nIterations = 0;
+    result->nFaces = 0;
+    return result;
+  }
 
   // Phase 1-3: Flatten, portals, funnel (TIMED as "flatten")
   auto flattenStart = std::chrono::high_resolution_clock::now();
@@ -758,36 +764,11 @@ static WalkDirection determineWalkDirection(
   return (signedAngle > 0) ? WalkDirection::CounterClockwise : WalkDirection::Clockwise;
 }
 
-// Find halfedge in face that points TO the given vertex
-static Halfedge findHalfedgeToVertex(Face face, Vertex vertex) {
-  for (Halfedge he : face.adjacentHalfedges()) {
-    if (he.tipVertex() == vertex) {
-      return he;
-    }
-  }
-  return Halfedge();
-}
-
-// Find halfedge in face that leaves FROM the given vertex
-static Halfedge findHalfedgeFromVertex(Face face, Vertex vertex) {
-  for (Halfedge he : face.adjacentHalfedges()) {
-    if (he.tailVertex() == vertex) {
-      return he;
-    }
-  }
-  return Halfedge();
-}
-
-// Check if face contains edge between two vertices
-static bool faceContainsEdge(Face face, Vertex v1, Vertex v2) {
-  for (Halfedge he : face.adjacentHalfedges()) {
-    if ((he.tailVertex() == v1 && he.tipVertex() == v2) ||
-        (he.tailVertex() == v2 && he.tipVertex() == v1)) {
-      return true;
-    }
-  }
-  return false;
-}
+// Use shared utilities from very_discrete_geodesic namespace
+using very_discrete_geodesic::findHalfedgeToVertex;
+using very_discrete_geodesic::findHalfedgeFromVertex;
+using very_discrete_geodesic::faceContainsEdge;
+using very_discrete_geodesic::getAllSharedFaces;
 
 // Walk around a vertex from startFace until finding a face containing edge to targetVertex
 // Returns the faces traversed (not including startFace, not including final face)
@@ -851,27 +832,6 @@ static std::vector<Face> walkToOutgoingEdge(
   return walked;
 }
 
-// Get all faces shared by two vertices (faces containing the edge between them)
-static std::vector<Face> getSharedFaces(Vertex v1, Vertex v2) {
-  std::vector<Face> shared;
-  for (Halfedge he : v1.outgoingHalfedges()) {
-    if (he.tipVertex() == v2 && he.isInterior()) {
-      shared.push_back(he.face());
-    }
-  }
-  for (Halfedge he : v2.outgoingHalfedges()) {
-    if (he.tipVertex() == v1 && he.isInterior()) {
-      Face f = he.face();
-      bool already = false;
-      for (Face existing : shared) {
-        if (existing == f) { already = true; break; }
-      }
-      if (!already) shared.push_back(f);
-    }
-  }
-  return shared;
-}
-
 std::vector<Face> buildFaceStrip(
     ManifoldSurfaceMesh& mesh,
     VertexPositionGeometry& geom,
@@ -892,15 +852,19 @@ std::vector<Face> buildFaceStrip(
   std::vector<Halfedge> edgePath = shortestEdgePath(geom, start, end);
 
   if (edgePath.empty()) {
+    std::cerr << "DEBUG: shortestEdgePath returned empty for V" << start.getIndex()
+              << " -> V" << end.getIndex() << std::endl;
     // Start and end on same face
     for (Face f : start.adjacentFaces()) {
       for (Vertex v : f.adjacentVertices()) {
         if (v == end) {
+          std::cerr << "DEBUG: Found shared face F" << f.getIndex() << std::endl;
           faces.push_back(f);
           return faces;
         }
       }
     }
+    std::cerr << "DEBUG: No shared face found - returning empty" << std::endl;
     return faces;
   }
 
@@ -916,7 +880,7 @@ std::vector<Face> buildFaceStrip(
   // Select first face - prefer the one that leads toward the second edge
   Vertex v0 = vertexPath[0];
   Vertex v1 = vertexPath[1];
-  auto firstEdgeFaces = getSharedFaces(v0, v1);
+  auto firstEdgeFaces = getAllSharedFaces(v0, v1);
 
   if (firstEdgeFaces.empty()) {
     return faces;

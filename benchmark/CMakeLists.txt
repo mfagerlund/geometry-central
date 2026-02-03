@@ -41,9 +41,15 @@ else()
   message( FATAL_ERROR "Unrecognized compiler [${CMAKE_CXX_COMPILER_ID}]" )
 endif()
 
-# Build the benchmark
+# Build the benchmarks
 add_executable(geodesic-comparison geodesic_comparison.cpp)
 target_link_libraries(geodesic-comparison geometry-central)
+
+add_executable(multi-mesh-benchmark multi_mesh_benchmark.cpp)
+target_link_libraries(multi-mesh-benchmark geometry-central)
+
+add_executable(debug-path debug_path.cpp)
+target_link_libraries(debug-path geometry-central)
 
 # Add geometry central as a subproject
 add_subdirectory(../ "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")

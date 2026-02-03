@@ -1,48 +1,8 @@
-// VeryDiscreteGeodesicPathfinder - Line-by-line port from C#
-//
-// METHODOLOGY: Each C# line is commented, followed by its C++ equivalent.
-// This ensures a 1:1 correspondence with the original C# implementation.
-//
-// Original C# files from Colonel.Meshing.GreedyFunnelRefinement:
-//   - VeryDiscreteGeodesicPathfinder.cs
-//   - VeryDiscreteGeodesicExplorer.cs
-//   - VeryDiscreteGeodesicExplorerHelper.cs
-//   - FaceStripWalker.cs
-//   - VertexPathToFaceStripConverter.cs
-//   - GeodesicPathJoiner.cs
-//   - FaceStripUtils.cs
+// VeryDiscreteGeodesic - A* pathfinder with L5 multi-face exploration
+// Uses 2D unfolding to explore vertices up to 5 faces deep, finding shorter
+// discrete path approximations than standard edge-only Dijkstra.
 
 #include "geometrycentral/surface/very_discrete_geodesic.h"
-// C# counterparts:
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/CachedGeodesicPathfinder.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/DiscreteGeodesicPathfinder.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/DiscreteGeodesicPathfinderTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/FunnelPortalAStar.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/FunnelPortalAStarTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/HeuristicExperiment/CandidateHeuristics.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/HeuristicExperiment/HeuristicBenchmarkTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/UnfoldedPortalAStar.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/UnfoldedPortalAStarBenchmark.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/UnfoldedPortalAStarPathfinder.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/UnfoldedPortalAStarTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/UnfoldedPortalAStarVisualizer.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/VeryDiscreteGeodesicExplorer.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/VeryDiscreteGeodesicExplorerHelper.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/VeryDiscreteGeodesicOptimizationBenchmark.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/VeryDiscreteGeodesicPathfinder.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/VeryDiscreteGeodesicPathfinderTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/VeryDiscreteGeodesicTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripBadPathFinderTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripBuilder.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripBuilderTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripRegressionTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripResult.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripUtils.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripWalker.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripWalkerTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/VertexPathStep.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/VertexPathToFaceStripConverter.cs
-
 
 #include <cmath>
 #include <algorithm>
@@ -102,7 +62,8 @@ Vector2 computeTriangleApex(Vector2 a, Vector2 b, double distA, double distB, bo
 
 Face getSharedFace(Vertex v1, Vertex v2) {
   for (Halfedge he : v1.outgoingHalfedges()) {
-    if (he.next().tipVertex() == v2 || he.next().next().tipVertex() == v2) {
+    // Check if v2 is any vertex in the same face as this halfedge
+    if (he.tipVertex() == v2 || he.next().tipVertex() == v2) {
       Face face = he.face();
 
       if (face != Face() && !face.isBoundaryLoop()) {
@@ -117,7 +78,11 @@ std::vector<Face> getAllSharedFaces(Vertex v1, Vertex v2) {
   std::vector<Face> result;
 
   for (Halfedge he : v1.outgoingHalfedges()) {
-    if (he.next().tipVertex() == v2 || he.next().next().tipVertex() == v2) {
+    // Check if v2 is any vertex in the same face as this halfedge:
+    // - he.tipVertex() == v2: v2 is directly connected to v1 via this edge
+    // - he.next().tipVertex() == v2: v2 is the third vertex of the triangle
+    // NOTE: he.next().next().tipVertex() is v1 itself, so we don't check that
+    if (he.tipVertex() == v2 || he.next().tipVertex() == v2) {
       Face face = he.face();
 
       if (face != Face() && !face.isBoundaryLoop()) {

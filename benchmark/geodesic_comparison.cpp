@@ -181,5 +181,153 @@ int main(int argc, char** argv) {
     std::cout << "  Max difference: " << maxDiff << std::endl;
   }
 
+  // Detailed win margin analysis
+  std::cout << std::endl;
+  std::cout << "============ WIN MARGIN ANALYSIS ============" << std::endl;
+  std::cout << std::endl;
+
+  // Calculate percentage differences and bucket them
+  // Negative = GFR shorter, Positive = FlipOut shorter
+  std::vector<double> percentDiffs;
+  for (const auto& r : results) {
+    double avg = (r.gfrLength + r.flipoutLength) / 2.0;
+    double pctDiff = 100.0 * (r.gfrLength - r.flipoutLength) / avg;
+    percentDiffs.push_back(pctDiff);
+  }
+
+  // Sort for percentile analysis
+  std::vector<double> sorted = percentDiffs;
+  std::sort(sorted.begin(), sorted.end());
+
+  // Histogram buckets
+  size_t gfrBig = 0;     // GFR wins by > 1%
+  size_t gfrMed = 0;     // GFR wins by 0.1-1%
+  size_t gfrSmall = 0;   // GFR wins by 0.01-0.1%
+  size_t gfrTiny = 0;    // GFR wins by 0.001-0.01%
+  size_t tieZone = 0;    // Within ±0.001%
+  size_t foTiny = 0;     // FlipOut wins by 0.001-0.01%
+  size_t foSmall = 0;    // FlipOut wins by 0.01-0.1%
+  size_t foMed = 0;      // FlipOut wins by 0.1-1%
+  size_t foBig = 0;      // FlipOut wins by > 1%
+
+  for (double d : percentDiffs) {
+    if (d < -1.0) gfrBig++;
+    else if (d < -0.1) gfrMed++;
+    else if (d < -0.01) gfrSmall++;
+    else if (d < -0.001) gfrTiny++;
+    else if (d <= 0.001) tieZone++;
+    else if (d < 0.01) foTiny++;
+    else if (d < 0.1) foSmall++;
+    else if (d < 1.0) foMed++;
+    else foBig++;
+  }
+
+  std::cout << "Distribution (% difference, negative = GFR shorter):" << std::endl;
+  std::cout << "  GFR wins by >1%:       " << std::setw(5) << gfrBig << " (" << std::setw(5) << std::fixed << std::setprecision(1) << (100.0 * gfrBig / numPairs) << "%)" << std::endl;
+  std::cout << "  GFR wins by 0.1-1%:    " << std::setw(5) << gfrMed << " (" << std::setw(5) << (100.0 * gfrMed / numPairs) << "%)" << std::endl;
+  std::cout << "  GFR wins by 0.01-0.1%: " << std::setw(5) << gfrSmall << " (" << std::setw(5) << (100.0 * gfrSmall / numPairs) << "%)" << std::endl;
+  std::cout << "  GFR wins by <0.01%:    " << std::setw(5) << gfrTiny << " (" << std::setw(5) << (100.0 * gfrTiny / numPairs) << "%)" << std::endl;
+  std::cout << "  Tie zone (±0.001%):    " << std::setw(5) << tieZone << " (" << std::setw(5) << (100.0 * tieZone / numPairs) << "%)" << std::endl;
+  std::cout << "  FlipOut wins by <0.01%:" << std::setw(5) << foTiny << " (" << std::setw(5) << (100.0 * foTiny / numPairs) << "%)" << std::endl;
+  std::cout << "  FlipOut wins by 0.01-0.1%:" << std::setw(4) << foSmall << " (" << std::setw(5) << (100.0 * foSmall / numPairs) << "%)" << std::endl;
+  std::cout << "  FlipOut wins by 0.1-1%:" << std::setw(5) << foMed << " (" << std::setw(5) << (100.0 * foMed / numPairs) << "%)" << std::endl;
+  std::cout << "  FlipOut wins by >1%:   " << std::setw(5) << foBig << " (" << std::setw(5) << (100.0 * foBig / numPairs) << "%)" << std::endl;
+  std::cout << std::endl;
+
+  // Percentiles
+  std::cout << "Percentiles (% difference):" << std::endl;
+  std::cout << "  Min (best GFR):  " << std::setw(8) << std::setprecision(4) << sorted.front() << "%" << std::endl;
+  std::cout << "  5th percentile:  " << std::setw(8) << sorted[numPairs * 5 / 100] << "%" << std::endl;
+  std::cout << "  25th percentile: " << std::setw(8) << sorted[numPairs * 25 / 100] << "%" << std::endl;
+  std::cout << "  Median:          " << std::setw(8) << sorted[numPairs / 2] << "%" << std::endl;
+  std::cout << "  75th percentile: " << std::setw(8) << sorted[numPairs * 75 / 100] << "%" << std::endl;
+  std::cout << "  95th percentile: " << std::setw(8) << sorted[numPairs * 95 / 100] << "%" << std::endl;
+  std::cout << "  Max (best FO):   " << std::setw(8) << sorted.back() << "%" << std::endl;
+  std::cout << std::endl;
+
+  // Mean difference
+  double sumDiff = 0;
+  for (double d : percentDiffs) sumDiff += d;
+  double meanDiff = sumDiff / numPairs;
+  std::cout << "Mean difference: " << std::setprecision(4) << meanDiff << "% (negative = GFR shorter overall)" << std::endl;
+  std::cout << std::endl;
+
+  // Iteration histogram
+  std::cout << "GFR Iteration Distribution:" << std::endl;
+  size_t iter0 = 0, iter1_5 = 0, iter6_20 = 0, iter21_50 = 0, iter50plus = 0;
+  for (const auto& r : results) {
+    if (r.gfrIterations == 0) iter0++;
+    else if (r.gfrIterations <= 5) iter1_5++;
+    else if (r.gfrIterations <= 20) iter6_20++;
+    else if (r.gfrIterations <= 50) iter21_50++;
+    else iter50plus++;
+  }
+  std::cout << "  0 iterations:     " << std::setw(5) << iter0 << " (" << std::setw(5) << (100.0 * iter0 / numPairs) << "%)" << std::endl;
+  std::cout << "  1-5 iterations:   " << std::setw(5) << iter1_5 << " (" << std::setw(5) << (100.0 * iter1_5 / numPairs) << "%)" << std::endl;
+  std::cout << "  6-20 iterations:  " << std::setw(5) << iter6_20 << " (" << std::setw(5) << (100.0 * iter6_20 / numPairs) << "%)" << std::endl;
+  std::cout << "  21-50 iterations: " << std::setw(5) << iter21_50 << " (" << std::setw(5) << (100.0 * iter21_50 / numPairs) << "%)" << std::endl;
+  std::cout << "  50+ iterations:   " << std::setw(5) << iter50plus << " (" << std::setw(5) << (100.0 * iter50plus / numPairs) << "%)" << std::endl;
+  std::cout << std::endl;
+
+  // Analyze 0-iteration paths specifically
+  if (iter0 > 0) {
+    std::cout << "Zero-Iteration Path Analysis:" << std::endl;
+    size_t zeroIterGfrWins = 0, zeroIterFoWins = 0, zeroIterTies = 0;
+    double zeroIterTotalDiff = 0;
+    for (const auto& r : results) {
+      if (r.gfrIterations == 0) {
+        double avg = (r.gfrLength + r.flipoutLength) / 2.0;
+        double pctDiff = 100.0 * (r.gfrLength - r.flipoutLength) / avg;
+        zeroIterTotalDiff += pctDiff;
+        if (r.gfrLength < r.flipoutLength - 1e-8) zeroIterGfrWins++;
+        else if (r.flipoutLength < r.gfrLength - 1e-8) zeroIterFoWins++;
+        else zeroIterTies++;
+      }
+    }
+    std::cout << "  GFR wins:     " << zeroIterGfrWins << " (" << (100.0 * zeroIterGfrWins / iter0) << "%)" << std::endl;
+    std::cout << "  FlipOut wins: " << zeroIterFoWins << " (" << (100.0 * zeroIterFoWins / iter0) << "%)" << std::endl;
+    std::cout << "  Ties:         " << zeroIterTies << " (" << (100.0 * zeroIterTies / iter0) << "%)" << std::endl;
+    std::cout << "  Mean diff:    " << std::setprecision(4) << (zeroIterTotalDiff / iter0) << "%" << std::endl;
+
+    // Show the 0-iter paths where GFR wins big
+    std::cout << "  Top GFR wins (0-iter):" << std::endl;
+    std::vector<std::pair<double, size_t>> zeroIterDiffs;
+    for (size_t i = 0; i < results.size(); i++) {
+      if (results[i].gfrIterations == 0) {
+        double avg = (results[i].gfrLength + results[i].flipoutLength) / 2.0;
+        double pct = 100.0 * (results[i].gfrLength - results[i].flipoutLength) / avg;
+        zeroIterDiffs.emplace_back(pct, i);
+      }
+    }
+    std::sort(zeroIterDiffs.begin(), zeroIterDiffs.end());
+    for (size_t i = 0; i < std::min(size_t(3), zeroIterDiffs.size()); i++) {
+      const auto& r = results[zeroIterDiffs[i].second];
+      std::cout << "    V" << r.v0 << " -> V" << r.v1
+                << ": GFR=" << r.gfrLength << ", FO=" << r.flipoutLength
+                << " (" << std::showpos << zeroIterDiffs[i].first << "%)" << std::noshowpos
+                << std::endl;
+    }
+    std::cout << std::endl;
+  }
+
+  // Show worst 5 paths where FlipOut wins significantly
+  std::cout << "Top 5 paths where FlipOut wins most:" << std::endl;
+  std::vector<std::pair<double, size_t>> worstForGfr;
+  for (size_t i = 0; i < results.size(); i++) {
+    double avg = (results[i].gfrLength + results[i].flipoutLength) / 2.0;
+    double pct = 100.0 * (results[i].gfrLength - results[i].flipoutLength) / avg;
+    worstForGfr.emplace_back(pct, i);
+  }
+  std::sort(worstForGfr.rbegin(), worstForGfr.rend());
+  for (size_t i = 0; i < std::min(size_t(5), worstForGfr.size()); i++) {
+    const auto& r = results[worstForGfr[i].second];
+    std::cout << "  V" << r.v0 << " -> V" << r.v1
+              << ": GFR=" << std::setprecision(4) << r.gfrLength
+              << ", FO=" << r.flipoutLength
+              << " (+" << worstForGfr[i].first << "% longer)"
+              << " GFR iters=" << r.gfrIterations << ", FO iters=" << r.flipoutIterations
+              << std::endl;
+  }
+
   return 0;
 }
