@@ -79,6 +79,9 @@ struct TimingStats {
   double flattenMs = 0;
   double straightenMs = 0;
   size_t pathCount = 0;
+  // HYPOTHESIS 2: Flip discovery stats
+  size_t flipAttempts = 0;
+  size_t flipFailures = 0;
 };
 TimingStats getTimingStats();
 void resetTimingStats();

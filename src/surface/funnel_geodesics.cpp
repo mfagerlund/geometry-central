@@ -22,6 +22,8 @@ namespace {
   double totalFlattenTimeMs = 0;
   double totalStraightenTimeMs = 0;
   size_t totalPathsComputed = 0;
+  size_t totalFlipAttempts = 0;
+  size_t totalFlipFailures = 0;
 }
 
 TimingStats getTimingStats() {
@@ -30,6 +32,8 @@ TimingStats getTimingStats() {
   stats.flattenMs = totalFlattenTimeMs;
   stats.straightenMs = totalStraightenTimeMs;
   stats.pathCount = totalPathsComputed;
+  stats.flipAttempts = totalFlipAttempts;
+  stats.flipFailures = totalFlipFailures;
   return stats;
 }
 
@@ -38,6 +42,8 @@ void resetTimingStats() {
   totalFlattenTimeMs = 0;
   totalStraightenTimeMs = 0;
   totalPathsComputed = 0;
+  totalFlipAttempts = 0;
+  totalFlipFailures = 0;
 }
 
 // ============================================================================
@@ -117,8 +123,11 @@ std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
   // Start phase at 1 so initial check (rejectedPhase[idx] != phase) works correctly
   std::vector<uint32_t> rejectedPhase(mesh.nVertices(), 0);
   const size_t maxIters = 20000;
-  const double minImprovement = 0.00001;
-  const double negligibleImprovement = 0.0001;
+
+  // Use relative thresholds based on path length to handle paths of all scales
+  // Accept any improvement > 0 (floating point epsilon for numerical stability)
+  // Mark corner as "done" if relative improvement is negligible (< 0.001% of path length)
+  const double relativeNegligible = 1e-5;  // 0.001% relative improvement considered negligible
 
   size_t iteration = 0;
   uint32_t phase = 1;
@@ -170,8 +179,10 @@ std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
         }
 
         auto action = funnel_internal::computeFlipAction(result->sleeveFaces, *cornerToFlip, mesh);
+        totalFlipAttempts++;
         if (!action.canFlip) {
           // Corner can't be flipped (boundary constraint) - reject for this phase
+          totalFlipFailures++;
           rejectedPhase[cornerToFlip->vertex.getIndex()] = phase;
           continue;
         }
@@ -185,11 +196,11 @@ std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
         auto newPortals = funnel_internal::buildPortals(newFaces, newFlatPos);
         auto newFunnel = funnel_internal::runFunnel(newPortals, entry2D, newFlatPos[endVert]);
 
-        // Require actual improvement
+        // Accept any improvement (flip is speculative, so no harm if we reject)
         double actualImprovement = distanceBefore - newFunnel.distance;
 
-        if (newFunnel.distance > distanceBefore - minImprovement) {
-          // Bad flip - reject for this phase (don't apply)
+        if (actualImprovement <= 0) {
+          // No improvement or worsening - reject for this phase
           rejectedPhase[idx] = phase;
           continue;
         }
@@ -205,16 +216,18 @@ std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
         // Re-analyze corners after flip
         corners = funnel_internal::analyzeCorners(result->sleeveFaces, funnel, flatPos);
 
-        // If improvement is negligible (< 0.0001), mark as rejected to prevent infinite loops
+        // If relative improvement is negligible, mark corner as rejected to prevent infinite loops
         // This catches cases where floating point drift causes tiny "improvements" that go nowhere
-        if (actualImprovement < negligibleImprovement) {
+        double relativeImprovement = actualImprovement / distanceBefore;
+        if (relativeImprovement < relativeNegligible) {
           rejectedPhase[idx] = phase;
         }
       }
 
-      // Phase complete - check for improvement
+      // Phase complete - check for improvement (relative threshold)
       double phaseEndDistance = funnel.distance;
-      bool improved = phaseEndDistance < phaseStartDistance - minImprovement;
+      double phaseImprovement = (phaseStartDistance - phaseEndDistance) / phaseStartDistance;
+      bool improved = phaseImprovement > relativeNegligible;
 
       // Re-analyze corners to check if any want to flip
       corners = funnel_internal::analyzeCorners(result->sleeveFaces, funnel, flatPos);

@@ -269,6 +269,15 @@ int main(int argc, char** argv) {
   std::cout << "  50+ iterations:   " << std::setw(5) << iter50plus << " (" << std::setw(5) << (100.0 * iter50plus / numPairs) << "%)" << std::endl;
   std::cout << std::endl;
 
+  // HYPOTHESIS 2: Flip discovery stats
+  auto flipStats = getTimingStats();
+  if (flipStats.flipAttempts > 0) {
+    std::cout << "Flip Discovery Stats (Hypothesis 2):" << std::endl;
+    std::cout << "  Total flip attempts: " << flipStats.flipAttempts << std::endl;
+    std::cout << "  Flip failures:       " << flipStats.flipFailures << " (" << (100.0 * flipStats.flipFailures / flipStats.flipAttempts) << "%)" << std::endl;
+    std::cout << std::endl;
+  }
+
   // Analyze 0-iteration paths specifically
   if (iter0 > 0) {
     std::cout << "Zero-Iteration Path Analysis:" << std::endl;
