@@ -45,11 +45,20 @@ endif()
 add_executable(geodesic-comparison geodesic_comparison.cpp)
 target_link_libraries(geodesic-comparison geometry-central)
 
+add_executable(gfr-strategy-benchmark gfr_strategy_benchmark.cpp)
+target_link_libraries(gfr-strategy-benchmark geometry-central)
+
 add_executable(multi-mesh-benchmark multi_mesh_benchmark.cpp)
 target_link_libraries(multi-mesh-benchmark geometry-central)
 
 add_executable(debug-path debug_path.cpp)
 target_link_libraries(debug-path geometry-central)
+
+add_executable(initial-distance-test initial_distance_test.cpp)
+target_link_libraries(initial-distance-test geometry-central)
+
+add_executable(diagnose-facestrip diagnose_facestrip.cpp)
+target_link_libraries(diagnose-facestrip geometry-central)
 
 # Add geometry central as a subproject
 add_subdirectory(../ "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")

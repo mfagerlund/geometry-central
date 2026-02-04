@@ -1,51 +1,11 @@
 #pragma once
 
-// VeryDiscreteGeodesicPathfinder - Line-by-line port from C#
-//
-// Original C# files:
-//   - VeryDiscreteGeodesicPathfinder.cs
-//   - VeryDiscreteGeodesicExplorer.cs
-//   - VeryDiscreteGeodesicExplorerHelper.cs
-//   - FaceStripWalker.cs
-//   - VertexPathToFaceStripConverter.cs
-//   - GeodesicPathJoiner.cs
-//   - FaceStripUtils.cs
-//
-// This is an A* pathfinder using multi-face jumps via unfolding.
-// Produces better initial approximations than edge-only Dijkstra.
+// VeryDiscreteGeodesic - A* pathfinder with L5 multi-face exploration
+// Produces better initial face strips than edge-only Dijkstra by unfolding
+// up to 5 faces deep to find better discrete path approximations.
 
 #include "geometrycentral/surface/manifold_surface_mesh.h"
 #include "geometrycentral/surface/vertex_position_geometry.h"
-// C# counterparts:
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/CachedGeodesicPathfinder.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/DiscreteGeodesicPathfinder.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/DiscreteGeodesicPathfinderTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/FunnelPortalAStar.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/FunnelPortalAStarTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/HeuristicExperiment/CandidateHeuristics.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/HeuristicExperiment/HeuristicBenchmarkTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/UnfoldedPortalAStar.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/UnfoldedPortalAStarBenchmark.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/UnfoldedPortalAStarPathfinder.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/UnfoldedPortalAStarTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/UnfoldedPortalAStarVisualizer.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/VeryDiscreteGeodesicExplorer.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/VeryDiscreteGeodesicExplorerHelper.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/VeryDiscreteGeodesicOptimizationBenchmark.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/VeryDiscreteGeodesicPathfinder.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/VeryDiscreteGeodesicPathfinderTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/DiscreteGeodesics/VeryDiscreteGeodesicTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripBadPathFinderTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripBuilder.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripBuilderTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripRegressionTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripResult.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripUtils.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripWalker.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/FaceStripWalkerTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/VertexPathStep.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FaceStripBuilding/VertexPathToFaceStripConverter.cs
-
 
 #include <memory>
 #include <vector>
@@ -225,6 +185,9 @@ std::pair<std::vector<Face>, std::vector<Vertex>> findFaceStripWithPath(
     VertexPositionGeometry& geom);
 
 double computePathDistance(const std::vector<PathStep>& steps);
+
+// Get face strip for a candidate from a corner (used for verification)
+std::vector<Face> getCrossedFaces(Corner corner, CandidateName candidateName);
 
 // ============================================================================
 // FaceStripWalker functions

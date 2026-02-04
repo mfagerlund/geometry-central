@@ -57,6 +57,24 @@ class FunnelGeodesicPath;
 // Main API
 // ============================================================================
 
+/// Strategy for selecting which corner to flip during straightening.
+enum class FlipStrategy {
+  /// Always pick the globally most acute corner (quality-gated).
+  CornerGreedy,
+  /// Flip most acute corner, then flip newly exposed vertices once (ungated).
+  WedgeGreedy,
+  /// Quality-gated corner greedy with a short coherent follow-up window.
+  CoherentMiniWedge
+};
+
+/// Options for GFR straightening behavior.
+struct FunnelGeodesicOptions {
+  FlipStrategy strategy = FlipStrategy::CornerGreedy;
+  size_t maxIterations = 20000;
+  size_t coherentMiniWedgeDepth = 1;
+  size_t coherentMiniWedgeMaxCandidates = 64;
+};
+
 /// Compute a geodesic path between two vertices using Funnel Refinement.
 /// This is the main entry point - mirrors FlipEdgeNetwork::constructFromDijkstraPath()
 std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
@@ -64,6 +82,14 @@ std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
     VertexPositionGeometry& geom,
     Vertex startVert,
     Vertex endVert);
+
+/// Compute a geodesic path with custom options (strategy, limits).
+std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
+    ManifoldSurfaceMesh& mesh,
+    VertexPositionGeometry& geom,
+    Vertex startVert,
+    Vertex endVert,
+    const FunnelGeodesicOptions& options);
 
 /// Get cache statistics for the VeryDiscreteGeodesic pathfinder (for debugging)
 struct CacheStats {
@@ -101,10 +127,14 @@ public:
   // Statistics
   size_t iterationCount() const;
   size_t faceCount() const;  // faces in final sleeve
+  double initialFunnelLength() const;  // length before any straightening
 
   // For visualization (optional)
   VertexPositionGeometry* posGeom = nullptr;
   std::vector<Vector3> getPathPolyline3D() const;
+
+  // For debugging
+  const std::vector<Face>& getSleeveFaces() const { return sleeveFaces; }
 
 private:
   ManifoldSurfaceMesh& mesh;
@@ -113,6 +143,7 @@ private:
   // Results
   std::vector<SurfacePoint> pathPoints;
   double pathLength = 0.0;
+  double initialLength = 0.0;  // funnel distance before any straightening
   size_t nIterations = 0;
   size_t nFaces = 0;
 
@@ -121,6 +152,8 @@ private:
 
   friend std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
       ManifoldSurfaceMesh&, VertexPositionGeometry&, Vertex, Vertex);
+  friend std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
+      ManifoldSurfaceMesh&, VertexPositionGeometry&, Vertex, Vertex, const FunnelGeodesicOptions&);
 };
 
 // ============================================================================

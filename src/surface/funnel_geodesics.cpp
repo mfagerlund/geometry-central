@@ -106,6 +106,7 @@ std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
   Vector2 entry2D = flatPos[startVert];
   Vector2 exit2D = flatPos[endVert];
   auto funnel = funnel_internal::runFunnel(portals, entry2D, exit2D);
+  result->initialLength = funnel.distance;  // Store initial funnel length before straightening
   auto flattenEnd = std::chrono::high_resolution_clock::now();
   totalFlattenTimeMs += std::chrono::duration<double, std::milli>(flattenEnd - flattenStart).count();
 
@@ -283,6 +284,8 @@ const std::vector<SurfacePoint>& FunnelGeodesicPath::getPath() const { return pa
 size_t FunnelGeodesicPath::iterationCount() const { return nIterations; }
 
 size_t FunnelGeodesicPath::faceCount() const { return nFaces; }
+
+double FunnelGeodesicPath::initialFunnelLength() const { return initialLength; }
 
 std::vector<Vector3> FunnelGeodesicPath::getPathPolyline3D() const {
   std::vector<Vector3> result;

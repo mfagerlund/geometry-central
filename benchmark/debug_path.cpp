@@ -64,7 +64,8 @@ int main(int argc, char** argv) {
   // Run GFR
   std::cout << "=== GFR ===" << std::endl;
   auto gfrPath = computeFunnelGeodesic(*mesh, *geometry, v0, v1);
-  std::cout << "Path length: " << gfrPath->length() << std::endl;
+  std::cout << "Initial funnel length: " << gfrPath->initialFunnelLength() << std::endl;
+  std::cout << "Final path length: " << gfrPath->length() << std::endl;
   std::cout << "Iterations: " << gfrPath->iterationCount() << std::endl;
   std::cout << "Faces in sleeve: " << gfrPath->faceCount() << std::endl;
   const auto& pathPts = gfrPath->getPath();
@@ -82,6 +83,19 @@ int main(int argc, char** argv) {
     }
   }
   std::cout << std::endl;
+
+  // Analyze corners
+  const auto& sleeveFaces = gfrPath->getSleeveFaces();
+  auto flatPos = funnel_internal::flattenSleeve(sleeveFaces, v0, *geometry);
+  auto portals = funnel_internal::buildPortals(sleeveFaces, flatPos);
+  auto funnel = funnel_internal::runFunnel(portals, flatPos[v0], flatPos[v1]);
+  auto corners = funnel_internal::analyzeCorners(sleeveFaces, funnel, flatPos);
+
+  std::cout << "Corner analysis (" << corners.size() << " corners):" << std::endl;
+  for (const auto& c : corners) {
+    std::cout << "  V" << c.vertex.getIndex() << ": angleErrorDeg=" << c.angleErrorDeg
+              << " wantsToFlip=" << (c.wantsToFlip() ? "YES" : "no") << std::endl;
+  }
   std::cout << std::endl;
 
   // Run FlipOut
@@ -99,10 +113,23 @@ int main(int argc, char** argv) {
 
   // Compare
   std::cout << "=== COMPARISON ===" << std::endl;
+
+  // Initial length comparison
+  double initDiff = gfrPath->initialFunnelLength() - initialLength;
+  double initPctDiff = 100.0 * initDiff / initialLength;
+  std::cout << "Initial: GFR funnel=" << gfrPath->initialFunnelLength()
+            << ", FlipOut Dijkstra=" << initialLength
+            << " (" << std::showpos << initPctDiff << "%)" << std::noshowpos << std::endl;
+  if (initDiff > 1e-9) {
+    std::cout << "  WARNING: GFR initial funnel is LONGER than Dijkstra!" << std::endl;
+  }
+
+  // Final length comparison
   double diff = gfrPath->length() - flipNetwork->length();
   double pctDiff = 100.0 * diff / flipNetwork->length();
-  std::cout << "Difference: " << diff << " (" << std::showpos << pctDiff << "%)" << std::endl;
-  std::cout << std::noshowpos;
+  std::cout << "Final: GFR=" << gfrPath->length()
+            << ", FlipOut=" << flipNetwork->length()
+            << " (" << std::showpos << pctDiff << "%)" << std::noshowpos << std::endl;
 
   if (gfrPath->length() < flipNetwork->length()) {
     std::cout << "Winner: GFR" << std::endl;

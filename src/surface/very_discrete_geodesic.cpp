@@ -22,6 +22,10 @@ namespace very_discrete_geodesic {
 // public static Vector2 ComputeTriangleApex(Vector2 a, Vector2 b, float distA, float distB, bool pickPositiveY)
 // ============================================================================
 Vector2 computeTriangleApex(Vector2 a, Vector2 b, double distA, double distB, bool pickPositiveY) {
+  // Handle degenerate cases where apex coincides with a base point
+  if (distA < 1e-10) return a;  // Apex at point a
+  if (distB < 1e-10) return b;  // Apex at point b
+
   Vector2 ab = b - a;
 
   double abLen = norm(ab);
@@ -160,6 +164,9 @@ bool segmentCrossesPortal(Vector2 v0, Vector2 target, Vector2 a, Vector2 b, doub
 
   double crossB = dx * (b.y - v0.y) - dy * (b.x - v0.x);
 
+  // Opposite signs = crosses (product negative)
+  // Product near zero = grazes endpoint (also valid, handles numerical precision)
+  // Matches C# implementation exactly
   return crossA * crossB <= eps;
 }
 
@@ -170,6 +177,52 @@ Vector2 flattenVertex(Vertex v, Halfedge portal, Vector2 flatA, Vector2 flatB,
   double d2 = norm(geom.vertexPositions[v] - geom.vertexPositions[portal.twin().tailVertex()]);
 
   return computeTriangleApex(flatA, flatB, d1, d2, false);
+}
+
+// Version that uses a reference point to pick the correct side (matches flattenSleeve)
+Vector2 flattenVertexWithRef(Vertex v, Halfedge portal, Vector2 flatA, Vector2 flatB,
+                             Vector2 refPoint, VertexPositionGeometry& geom) {
+  double d1 = norm(geom.vertexPositions[v] - geom.vertexPositions[portal.tailVertex()]);
+  double d2 = norm(geom.vertexPositions[v] - geom.vertexPositions[portal.twin().tailVertex()]);
+
+  // Use circleIntersect with reference point (same as flattenSleeve)
+  double dx = flatB.x - flatA.x;
+  double dy = flatB.y - flatA.y;
+  double d = std::sqrt(dx * dx + dy * dy);
+
+  if (d < 1e-14) return Vector2{flatA.x + d1, flatA.y};
+
+  if (d > d1 + d2 + 1e-10 || d < std::abs(d1 - d2) - 1e-10)
+    return Vector2{flatA.x + dx / d * d1, flatA.y + dy / d * d1};
+
+  double a = (d1 * d1 - d2 * d2 + d * d) / (2.0 * d);
+  double hSq = d1 * d1 - a * a;
+  if (hSq < 0) hSq = 0;
+  double h = std::sqrt(hSq);
+
+  double invD = 1.0 / d;
+  double dirX = dx * invD;
+  double dirY = dy * invD;
+  double midX = flatA.x + dirX * a;
+  double midY = flatA.y + dirY * a;
+
+  if (h < 1e-10) return Vector2{midX, midY};
+
+  double perpX = -dirY * h;
+  double perpY = dirX * h;
+
+  double p1X = midX + perpX;
+  double p1Y = midY + perpY;
+
+  // Pick the side OPPOSITE to refPoint (matching flattenSleeve)
+  double refSide = dx * (refPoint.y - flatA.y) - dy * (refPoint.x - flatA.x);
+  double p1Side = dx * (p1Y - flatA.y) - dy * (p1X - flatA.x);
+
+  if (p1Side * refSide < 0) {
+    return Vector2{p1X, p1Y};
+  } else {
+    return Vector2{midX - perpX, midY - perpY};
+  }
 }
 
 Vector2 getFlatPosition(Vertex v, Halfedge portal, Vector2 flatP1, Vector2 flatP2, Vector2 flatApex) {
@@ -293,20 +346,24 @@ ExplorationResult explore(Corner corner, VertexPositionGeometry& geom) {
     return result;
   }
 
-  Face fL1 = fL1Raw;
+  // heL1 is in the adjacent face across edge (v0, v1) where v1 = corner.halfedge().tipVertex()
+  // The portal is the edge (v0, v1) - note: v0 is ON this portal
   Halfedge heL1 = corner.halfedge().twin();
-  // Note: heL1.Prev is the halfedge before heL1 in the face, and .Vertex is its tail
-  // In geometry-central: heL1.next().next() goes around the triangle, or use the apex
-  Vertex vL1 = heL1.next().next().vertex();  // The apex opposite to heL1
+  Face fL1 = heL1.face();
+  // vL1 is the apex of fL1 opposite to heL1 (the vertex not on the portal)
+  // In a triangle: he.next().vertex() gives the tip of the next edge = the apex
+  Vertex vL1 = heL1.next().next().vertex();
 
   Vector3 heL1_v1_3d = geom.vertexPositions[heL1.tailVertex()];
   Vector3 heL1_v2_3d = geom.vertexPositions[heL1.twin().tailVertex()];
   double portalLen = norm(heL1_v1_3d - heL1_v2_3d);
 
-  Vector2 flat_heL1_a = {-portalLen / 2.0, 0.0};
-  Vector2 flat_heL1_b = {portalLen / 2.0, 0.0};
+  // Portal centered on X-axis (original VDG coordinate system)
+  Vector2 flat_heL1_a = {-portalLen / 2.0, 0.0};  // heL1.tailVertex()
+  Vector2 flat_heL1_b = {portalLen / 2.0, 0.0};   // v0 (heL1.twin().tailVertex())
 
-  //         v0.Position.DistanceTo(heL1_v1_3d), v0.Position.DistanceTo(heL1_v2_3d), pickPositiveY: true);
+  // v0 is ON the portal (it's one endpoint: heL1.twin().tailVertex() = v0)
+  // Compute v0's flat position (will be on X-axis at one endpoint)
   double d_v0_to_v1 = norm(geom.vertexPositions[v0] - heL1_v1_3d);
   double d_v0_to_v2 = norm(geom.vertexPositions[v0] - heL1_v2_3d);
   Vector2 flat_v0 = computeTriangleApex(flat_heL1_a, flat_heL1_b, d_v0_to_v1, d_v0_to_v2, true);
@@ -316,11 +373,17 @@ ExplorationResult explore(Corner corner, VertexPositionGeometry& geom) {
     return result;
   }
 
-  // Compute L1 position
+  // The third vertex of f0 (not on portal) is the one that "falls off" from f0 to fL1
+  // This is corner.halfedge().next().tipVertex() = corner.halfedge().next().next().vertex()
+  // (In a triangle: corner.halfedge() -> next() -> tipVertex() = next().next().vertex())
+  Vertex v0_third = corner.halfedge().next().tipVertex();
+  double d_v0third_to_v1 = norm(geom.vertexPositions[v0_third] - heL1_v1_3d);
+  double d_v0third_to_v2 = norm(geom.vertexPositions[v0_third] - heL1_v2_3d);
+  Vector2 flat_v0_third = computeTriangleApex(flat_heL1_a, flat_heL1_b, d_v0third_to_v1, d_v0third_to_v2, true);
+
+  // Compute L1 position - use flat_v0_third as reference (vertex that "fell off" from f0 to fL1)
   bool computedL1 = true;
-  double d_vL1_to_v1 = norm(geom.vertexPositions[vL1] - heL1_v1_3d);
-  double d_vL1_to_v2 = norm(geom.vertexPositions[vL1] - heL1_v2_3d);
-  Vector2 flat_L1 = computeTriangleApex(flat_heL1_a, flat_heL1_b, d_vL1_to_v1, d_vL1_to_v2, false);
+  Vector2 flat_L1 = flattenVertexWithRef(vL1, heL1, flat_heL1_a, flat_heL1_b, flat_v0_third, geom);
 
   // ========== LEFT SIDE ==========
   Halfedge heL2L, heL3L, heL4L, heL5L, heL4LM, heL5LM;
@@ -337,6 +400,13 @@ ExplorationResult explore(Corner corner, VertexPositionGeometry& geom) {
   bool computedL2L = false, computedL3L = false, computedL4L = false, computedL5L = false;
   bool computedL5LM = false;
 
+  // Track fell-off reference points for each level
+  // When transitioning from face A to face B, the fell-off vertex is the one in A but not in B
+  // For L1 -> L2L: heL1.tailVertex() is not in fL2L (since heL2L = heL1.next().twin())
+  // For L2L -> L3L: heL2L.tailVertex() is not in fL3L (since heL3L = heL2L.prevOrbitFace().twin())
+  // For L3L -> L4L: heL3L.tailVertex() is not in fL4L
+  // For L4L -> L5L: heL4L.tailVertex() is not in fL5L
+
   if (computeL2) {
     heL2L = heL1.next().twin();
     fL2L = heL2L.face();
@@ -347,7 +417,9 @@ ExplorationResult explore(Corner corner, VertexPositionGeometry& geom) {
     {
       flat_heL2L_a = getFlatPosition(heL2L.tailVertex(), heL1, flat_heL1_a, flat_heL1_b, flat_L1);
       flat_heL2L_b = getFlatPosition(heL2L.twin().tailVertex(), heL1, flat_heL1_a, flat_heL1_b, flat_L1);
-      flat_L2L = flattenVertex(vL2L, heL2L, flat_heL2L_a, flat_heL2L_b, geom);
+      // Reference point for L2L: heL1.tailVertex() fell off from fL1 to fL2L
+      Vector2 refL2L = getFlatPosition(heL1.tailVertex(), heL1, flat_heL1_a, flat_heL1_b, flat_L1);
+      flat_L2L = flattenVertexWithRef(vL2L, heL2L, flat_heL2L_a, flat_heL2L_b, refL2L, geom);
 
       // Continue to L3L if enabled and not boundary
       if (computeL3 && !fL2LIsBoundary) {
@@ -360,7 +432,10 @@ ExplorationResult explore(Corner corner, VertexPositionGeometry& geom) {
         {
           flat_heL3L_a = getFlatPosition(heL3L.tailVertex(), heL2L, flat_heL2L_a, flat_heL2L_b, flat_L2L);
           flat_heL3L_b = getFlatPosition(heL3L.twin().tailVertex(), heL2L, flat_heL2L_a, flat_heL2L_b, flat_L2L);
-          flat_L3L = flattenVertex(vL3L, heL3L, flat_heL3L_a, flat_heL3L_b, geom);
+          // Reference point for L3L: heL2L.tipVertex() fell off from fL2L to fL3L
+          // (prev() transition: tip vertex falls off, not tail)
+          Vector2 refL3L = getFlatPosition(heL2L.tipVertex(), heL2L, flat_heL2L_a, flat_heL2L_b, flat_L2L);
+          flat_L3L = flattenVertexWithRef(vL3L, heL3L, flat_heL3L_a, flat_heL3L_b, refL3L, geom);
 
           if (computeL4 && !fL3LIsBoundary) {
             heL4L = heL3L.next().twin();
@@ -372,7 +447,9 @@ ExplorationResult explore(Corner corner, VertexPositionGeometry& geom) {
             {
               flat_heL4L_a = getFlatPosition(heL4L.tailVertex(), heL3L, flat_heL3L_a, flat_heL3L_b, flat_L3L);
               flat_heL4L_b = getFlatPosition(heL4L.twin().tailVertex(), heL3L, flat_heL3L_a, flat_heL3L_b, flat_L3L);
-              flat_L4L = flattenVertex(vL4L, heL4L, flat_heL4L_a, flat_heL4L_b, geom);
+              // Reference point for L4L: heL3L.tailVertex() fell off from fL3L to fL4L
+              Vector2 refL4L = getFlatPosition(heL3L.tailVertex(), heL3L, flat_heL3L_a, flat_heL3L_b, flat_L3L);
+              flat_L4L = flattenVertexWithRef(vL4L, heL4L, flat_heL4L_a, flat_heL4L_b, refL4L, geom);
 
               if (computeL5 && !fL4LIsBoundary) {
                 heL5L = heL4L.next().next().twin();
@@ -383,7 +460,10 @@ ExplorationResult explore(Corner corner, VertexPositionGeometry& geom) {
                 computedL5L = true;
                 flat_heL5L_a = getFlatPosition(heL5L.tailVertex(), heL4L, flat_heL4L_a, flat_heL4L_b, flat_L4L);
                 flat_heL5L_b = getFlatPosition(heL5L.twin().tailVertex(), heL4L, flat_heL4L_a, flat_heL4L_b, flat_L4L);
-                flat_L5L = flattenVertex(vL5L, heL5L, flat_heL5L_a, flat_heL5L_b, geom);
+                // Reference point for L5L: heL4L.tipVertex() fell off from fL4L to fL5L
+                // (prev() transition: tip vertex falls off, not tail)
+                Vector2 refL5L = getFlatPosition(heL4L.tipVertex(), heL4L, flat_heL4L_a, flat_heL4L_b, flat_L4L);
+                flat_L5L = flattenVertexWithRef(vL5L, heL5L, flat_heL5L_a, flat_heL5L_b, refL5L, geom);
               }
             }
           }
@@ -405,10 +485,16 @@ ExplorationResult explore(Corner corner, VertexPositionGeometry& geom) {
               computedL5LM = true;
               {
                 Vertex heL4LMApex = heL4LM.next().next().vertex();
-                Vector2 flatL4LMApex = flattenVertex(heL4LMApex, heL4LM, flat_heL4LM_a, flat_heL4LM_b, geom);
+                // Reference for L4LM apex: heL3L.tipVertex() fell off from fL3L to fL4LM
+                // (prev() transition: tip vertex falls off, not tail)
+                Vector2 refL4LM = getFlatPosition(heL3L.tipVertex(), heL3L, flat_heL3L_a, flat_heL3L_b, flat_L3L);
+                Vector2 flatL4LMApex = flattenVertexWithRef(heL4LMApex, heL4LM, flat_heL4LM_a, flat_heL4LM_b, refL4LM, geom);
                 flat_heL5LM_a = getFlatPosition(heL5LM.tailVertex(), heL4LM, flat_heL4LM_a, flat_heL4LM_b, flatL4LMApex);
                 flat_heL5LM_b = getFlatPosition(heL5LM.twin().tailVertex(), heL4LM, flat_heL4LM_a, flat_heL4LM_b, flatL4LMApex);
-                flat_L5LM = flattenVertex(vL5LM, heL5LM, flat_heL5LM_a, flat_heL5LM_b, geom);
+                // Reference for L5LM: heL4LM.tailVertex() fell off from fL4LM to fL5LM
+                // (next() transition: tail vertex falls off)
+                Vector2 refL5LM = getFlatPosition(heL4LM.tailVertex(), heL4LM, flat_heL4LM_a, flat_heL4LM_b, flatL4LMApex);
+                flat_L5LM = flattenVertexWithRef(vL5LM, heL5LM, flat_heL5LM_a, flat_heL5LM_b, refL5LM, geom);
               }
             }
           }
@@ -444,7 +530,10 @@ ExplorationResult explore(Corner corner, VertexPositionGeometry& geom) {
     {
       flat_heL2R_a = getFlatPosition(heL2R.tailVertex(), heL1, flat_heL1_a, flat_heL1_b, flat_L1);
       flat_heL2R_b = getFlatPosition(heL2R.twin().tailVertex(), heL1, flat_heL1_a, flat_heL1_b, flat_L1);
-      flat_L2R = flattenVertex(vL2R, heL2R, flat_heL2R_a, flat_heL2R_b, geom);
+      // Reference for L2R: heL1.tipVertex() (twin.tailVertex) fell off from fL1 to fL2R
+      // (heL2R = heL1.next().next().twin(), so the shared edge is different from L2L)
+      Vector2 refL2R = getFlatPosition(heL1.tipVertex(), heL1, flat_heL1_a, flat_heL1_b, flat_L1);
+      flat_L2R = flattenVertexWithRef(vL2R, heL2R, flat_heL2R_a, flat_heL2R_b, refL2R, geom);
 
       if (computeL3 && !fL2RIsBoundary) {
         heL3R = heL2R.next().twin();
@@ -456,7 +545,9 @@ ExplorationResult explore(Corner corner, VertexPositionGeometry& geom) {
         {
           flat_heL3R_a = getFlatPosition(heL3R.tailVertex(), heL2R, flat_heL2R_a, flat_heL2R_b, flat_L2R);
           flat_heL3R_b = getFlatPosition(heL3R.twin().tailVertex(), heL2R, flat_heL2R_a, flat_heL2R_b, flat_L2R);
-          flat_L3R = flattenVertex(vL3R, heL3R, flat_heL3R_a, flat_heL3R_b, geom);
+          // Reference for L3R: heL2R.tailVertex() fell off from fL2R to fL3R
+          Vector2 refL3R = getFlatPosition(heL2R.tailVertex(), heL2R, flat_heL2R_a, flat_heL2R_b, flat_L2R);
+          flat_L3R = flattenVertexWithRef(vL3R, heL3R, flat_heL3R_a, flat_heL3R_b, refL3R, geom);
 
           if (computeL4 && !fL3RIsBoundary) {
             heL4R = heL3R.next().next().twin();
@@ -468,7 +559,10 @@ ExplorationResult explore(Corner corner, VertexPositionGeometry& geom) {
             {
               flat_heL4R_a = getFlatPosition(heL4R.tailVertex(), heL3R, flat_heL3R_a, flat_heL3R_b, flat_L3R);
               flat_heL4R_b = getFlatPosition(heL4R.twin().tailVertex(), heL3R, flat_heL3R_a, flat_heL3R_b, flat_L3R);
-              flat_L4R = flattenVertex(vL4R, heL4R, flat_heL4R_a, flat_heL4R_b, geom);
+              // Reference for L4R: heL3R.tipVertex() fell off from fL3R to fL4R
+              // (prev() transition: tip vertex falls off, not tail)
+              Vector2 refL4R = getFlatPosition(heL3R.tipVertex(), heL3R, flat_heL3R_a, flat_heL3R_b, flat_L3R);
+              flat_L4R = flattenVertexWithRef(vL4R, heL4R, flat_heL4R_a, flat_heL4R_b, refL4R, geom);
 
               if (computeL5 && !fL4RIsBoundary) {
                 heL5R = heL4R.next().twin();
@@ -479,7 +573,9 @@ ExplorationResult explore(Corner corner, VertexPositionGeometry& geom) {
                 computedL5R = true;
                 flat_heL5R_a = getFlatPosition(heL5R.tailVertex(), heL4R, flat_heL4R_a, flat_heL4R_b, flat_L4R);
                 flat_heL5R_b = getFlatPosition(heL5R.twin().tailVertex(), heL4R, flat_heL4R_a, flat_heL4R_b, flat_L4R);
-                flat_L5R = flattenVertex(vL5R, heL5R, flat_heL5R_a, flat_heL5R_b, geom);
+                // Reference for L5R: heL4R.tailVertex() fell off from fL4R to fL5R
+                Vector2 refL5R = getFlatPosition(heL4R.tailVertex(), heL4R, flat_heL4R_a, flat_heL4R_b, flat_L4R);
+                flat_L5R = flattenVertexWithRef(vL5R, heL5R, flat_heL5R_a, flat_heL5R_b, refL5R, geom);
               }
             }
           }
@@ -501,10 +597,16 @@ ExplorationResult explore(Corner corner, VertexPositionGeometry& geom) {
               computedL5RM = true;
               {
                 Vertex heL4RMApex = heL4RM.next().next().vertex();
-                Vector2 flatL4RMApex = flattenVertex(heL4RMApex, heL4RM, flat_heL4RM_a, flat_heL4RM_b, geom);
+                // Reference for L4RM apex: heL3R.tailVertex() fell off from fL3R to fL4RM
+                // (next() transition: tail vertex falls off)
+                Vector2 refL4RM = getFlatPosition(heL3R.tailVertex(), heL3R, flat_heL3R_a, flat_heL3R_b, flat_L3R);
+                Vector2 flatL4RMApex = flattenVertexWithRef(heL4RMApex, heL4RM, flat_heL4RM_a, flat_heL4RM_b, refL4RM, geom);
                 flat_heL5RM_a = getFlatPosition(heL5RM.tailVertex(), heL4RM, flat_heL4RM_a, flat_heL4RM_b, flatL4RMApex);
                 flat_heL5RM_b = getFlatPosition(heL5RM.twin().tailVertex(), heL4RM, flat_heL4RM_a, flat_heL4RM_b, flatL4RMApex);
-                flat_L5RM = flattenVertex(vL5RM, heL5RM, flat_heL5RM_a, flat_heL5RM_b, geom);
+                // Reference for L5RM: heL4RM.tipVertex() fell off from fL4RM to fL5RM
+                // (prev() transition: tip vertex falls off, not tail)
+                Vector2 refL5RM = getFlatPosition(heL4RM.tipVertex(), heL4RM, flat_heL4RM_a, flat_heL4RM_b, flatL4RMApex);
+                flat_L5RM = flattenVertexWithRef(vL5RM, heL5RM, flat_heL5RM_a, flat_heL5RM_b, refL5RM, geom);
               }
             }
           }
@@ -870,7 +972,7 @@ static std::vector<Face> getFacesL5RM(Face f0, Face fL1, Halfedge heL1) {
   return {f0, fL1, heL2R.face(), heL3R.face(), heL4RM.face(), heL5RM.face()};
 }
 
-static std::vector<Face> getCrossedFaces(Corner corner, CandidateName candidateName) {
+std::vector<Face> getCrossedFaces(Corner corner, CandidateName candidateName) {
   Face f0 = corner.face();
   Halfedge heL1 = corner.halfedge().twin();
   if (heL1.face().isBoundaryLoop()) return {};
