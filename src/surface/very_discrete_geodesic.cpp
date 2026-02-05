@@ -692,6 +692,37 @@ WalkDirection determineWalkDirection(Vertex prev, Vertex current, Vertex next,
   return isLeftTurn ? WalkDirection::CounterClockwise : WalkDirection::Clockwise;
 }
 
+// Compute corner angle at vertex in face (in radians)
+static double cornerAngleAtVertex(Face face, Vertex vertex, VertexPositionGeometry& geom) {
+  // Find the two edges adjacent to vertex in this face
+  Vertex prev, next;
+  for (Halfedge he : face.adjacentHalfedges()) {
+    if (he.tipVertex() == vertex) {
+      prev = he.tailVertex();
+    }
+    if (he.tailVertex() == vertex) {
+      next = he.tipVertex();
+    }
+  }
+
+  Vector3 vPos = geom.vertexPositions[vertex];
+  Vector3 e1 = geom.vertexPositions[prev] - vPos;
+  Vector3 e2 = geom.vertexPositions[next] - vPos;
+
+  double cosAngle = dot(unit(e1), unit(e2));
+  cosAngle = std::max(-1.0, std::min(1.0, cosAngle));  // clamp for numerical safety
+  return std::acos(cosAngle);
+}
+
+// Compute total angle sum for faces in a walk result
+static double computeWalkAngleSum(const WalkResult& walk, Vertex vertex, VertexPositionGeometry& geom) {
+  double angleSum = 0.0;
+  for (Face f : walk.faces) {
+    angleSum += cornerAngleAtVertex(f, vertex, geom);
+  }
+  return angleSum;
+}
+
 WalkResult walkToOutgoingEdge(Face startFace, Vertex vertex, Vertex targetVertex,
                                WalkDirection direction) {
   WalkResult result;
@@ -1365,31 +1396,35 @@ static Face handleEdgeStep(
     return currentFace;
   }
 
-  Vertex prevVertex = steps[stepIndex - 1].from;
-  WalkDirection direction = determineWalkDirection(prevVertex, from, to, geom);
+  // Try both directions and pick the one with smaller angle sum
+  WalkResult walkCW = walkToOutgoingEdge(currentFace, from, to, WalkDirection::Clockwise);
+  WalkResult walkCCW = walkToOutgoingEdge(currentFace, from, to, WalkDirection::CounterClockwise);
 
-  WalkResult walk = walkToOutgoingEdge(currentFace, from, to, direction);
+  WalkResult* walk = nullptr;
 
-  if (!walk.reachedTarget) {
-    //         ? WalkDirection.CounterClockwise : WalkDirection.Clockwise;
-    WalkDirection oppositeDir = (direction == WalkDirection::Clockwise)
-      ? WalkDirection::CounterClockwise
-      : WalkDirection::Clockwise;
-    walk = walkToOutgoingEdge(currentFace, from, to, oppositeDir);
+  if (walkCW.reachedTarget && walkCCW.reachedTarget) {
+    // Both reached - pick the one with smaller angle sum
+    double angleCW = computeWalkAngleSum(walkCW, from, geom);
+    double angleCCW = computeWalkAngleSum(walkCCW, from, geom);
+    walk = (angleCW <= angleCCW) ? &walkCW : &walkCCW;
+  } else if (walkCW.reachedTarget) {
+    walk = &walkCW;
+  } else if (walkCCW.reachedTarget) {
+    walk = &walkCCW;
   }
 
-  if (walk.reachedTarget) {
-    int finalIdx = (walk.finalFace != Face()) ? findFaceIndex(faces, walk.finalFace) : -1;
+  if (walk != nullptr && walk->reachedTarget) {
+    int finalIdx = (walk->finalFace != Face()) ? findFaceIndex(faces, walk->finalFace) : -1;
 
     if (finalIdx >= 0) {
       //         faces.RemoveRange(finalIdx + 1, faces.Count - finalIdx - 1);
       if (finalIdx + 1 < static_cast<int>(faces.size())) {
         faces.erase(faces.begin() + finalIdx + 1, faces.end());
       }
-      return walk.finalFace;
+      return walk->finalFace;
     }
 
-    for (Face f : walk.faces) {
+    for (Face f : walk->faces) {
       int existingIdx = findFaceIndex(faces, f);
 
       if (existingIdx >= 0) {
@@ -1402,7 +1437,7 @@ static Face handleEdgeStep(
         faces.push_back(f);
       }
     }
-    return walk.finalFace;
+    return walk->finalFace;
   }
 
   Face fallbackFace = getSharedFace(from, to);

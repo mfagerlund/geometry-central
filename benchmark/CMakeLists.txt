@@ -60,5 +60,8 @@ target_link_libraries(initial-distance-test geometry-central)
 add_executable(diagnose-facestrip diagnose_facestrip.cpp)
 target_link_libraries(diagnose-facestrip geometry-central)
 
+add_executable(fan-direction-test fan_direction_test.cpp)
+target_link_libraries(fan-direction-test geometry-central)
+
 # Add geometry central as a subproject
 add_subdirectory(../ "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
