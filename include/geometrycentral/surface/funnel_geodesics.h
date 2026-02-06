@@ -99,6 +99,9 @@ struct CacheStats {
 };
 CacheStats getCacheStats();
 
+/// Clear the internal cache (for cold-cache benchmarking)
+void clearFunnelCache();
+
 /// Get timing breakdown for profiling
 struct TimingStats {
   double aStarMs = 0;

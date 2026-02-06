@@ -80,10 +80,28 @@ struct MeshResult {
   size_t gfrTotalIters;
   size_t flipoutTotalIters;
 
+  // Investigation stats
+  size_t gfrTotalFaces;           // Total sleeve face count
+  double gfrTotalInitialLength;   // Total initial funnel length (before straightening)
+  size_t cacheHits;
+  size_t cacheMisses;
+  double aStarMs;
+  double flattenMs;
+  double straightenMs;
+
   double speedup() const { return flipoutTotalTime / gfrTotalTime; }
   double vsFlipout() const { return 100.0 * (gfrTotalLength - flipoutTotalLength) / flipoutTotalLength; }
   double avgGfrTime() const { return gfrTotalTime / numPaths; }
   double avgFlipoutTime() const { return flipoutTotalTime / numPaths; }
+  double avgFaces() const { return (double)gfrTotalFaces / numPaths; }
+  double avgIters() const { return (double)gfrTotalIters / numPaths; }
+  double itersPerFace() const { return (double)gfrTotalIters / gfrTotalFaces; }
+  double straighteningImprovement() const {
+    return 100.0 * (gfrTotalInitialLength - gfrTotalLength) / gfrTotalInitialLength;
+  }
+  double cacheHitRate() const {
+    return 100.0 * cacheHits / (cacheHits + cacheMisses);
+  }
 };
 
 // Default meshes to benchmark (matching paper-draft.md)
@@ -156,8 +174,9 @@ MeshResult benchmarkMesh(const std::string& meshPath, size_t numPaths, unsigned 
     }
   }
 
-  // Reset timing stats
+  // Reset timing stats and clear cache - start cold, no pre-warming
   resetTimingStats();
+  clearFunnelCache();
 
   // Initialize accumulators
   result.gfrTotalTime = 0;
@@ -169,6 +188,8 @@ MeshResult benchmarkMesh(const std::string& meshPath, size_t numPaths, unsigned 
   result.ties = 0;
   result.gfrTotalIters = 0;
   result.flipoutTotalIters = 0;
+  result.gfrTotalFaces = 0;
+  result.gfrTotalInitialLength = 0;
 
   // Progress indicator
   size_t progressStep = std::max(numPaths / 20, (size_t)1);
@@ -184,6 +205,8 @@ MeshResult benchmarkMesh(const std::string& meshPath, size_t numPaths, unsigned 
     double gfrTime = std::chrono::duration<double, std::milli>(gfrEnd - gfrStart).count();
     double gfrLen = gfrPath->length();
     size_t gfrIters = gfrPath->iterationCount();
+    size_t gfrFaces = gfrPath->faceCount();
+    double gfrInitialLen = gfrPath->initialFunnelLength();
 
     // Run FlipOut
     auto flipStart = std::chrono::high_resolution_clock::now();
@@ -201,6 +224,8 @@ MeshResult benchmarkMesh(const std::string& meshPath, size_t numPaths, unsigned 
     result.flipoutTotalLength += flipLen;
     result.gfrTotalIters += gfrIters;
     result.flipoutTotalIters += flipIters;
+    result.gfrTotalFaces += gfrFaces;
+    result.gfrTotalInitialLength += gfrInitialLen;
 
     // Compare lengths (within tolerance)
     const double tol = 1e-8;
@@ -221,6 +246,15 @@ MeshResult benchmarkMesh(const std::string& meshPath, size_t numPaths, unsigned 
   if (verbose) {
     std::cerr << " done" << std::endl;
   }
+
+  // Capture cache and timing stats
+  auto cacheStats = getCacheStats();
+  auto timingStats = getTimingStats();
+  result.cacheHits = cacheStats.hits;
+  result.cacheMisses = cacheStats.misses;
+  result.aStarMs = timingStats.aStarMs;
+  result.flattenMs = timingStats.flattenMs;
+  result.straightenMs = timingStats.straightenMs;
 
   return result;
 }
@@ -265,6 +299,45 @@ void printAggregate(std::ostream& out, const std::vector<MeshResult>& results) {
   out << (avgVsFlipout < 0 ? "shorter" : "longer") << " paths." << std::endl;
 }
 
+void printDiagnosticTable(std::ostream& out, const std::vector<MeshResult>& results) {
+  out << std::endl;
+  out << "## Investigation: Speedup vs Mesh Characteristics" << std::endl;
+  out << std::endl;
+  out << "| Mesh | Vertices | Speedup | AvgFaces | AvgIters | Iters/Face | Cache% | Straighten% |" << std::endl;
+  out << "|------|----------|---------|----------|----------|------------|--------|-------------|" << std::endl;
+
+  for (const auto& r : results) {
+    out << "| " << r.name;
+    out << " | " << formatNumber(r.vertices);
+    out << " | " << std::fixed << std::setprecision(2) << r.speedup() << "x";
+    out << " | " << std::fixed << std::setprecision(1) << r.avgFaces();
+    out << " | " << std::fixed << std::setprecision(1) << r.avgIters();
+    out << " | " << std::fixed << std::setprecision(3) << r.itersPerFace();
+    out << " | " << std::fixed << std::setprecision(1) << r.cacheHitRate() << "%";
+    out << " | " << std::fixed << std::setprecision(2) << r.straighteningImprovement() << "%";
+    out << " |" << std::endl;
+  }
+
+  // Analysis summary
+  out << std::endl;
+  out << "**Analysis:**" << std::endl;
+
+  // Find lowest and highest speedup meshes
+  auto minIt = std::min_element(results.begin(), results.end(),
+      [](const MeshResult& a, const MeshResult& b) { return a.speedup() < b.speedup(); });
+  auto maxIt = std::max_element(results.begin(), results.end(),
+      [](const MeshResult& a, const MeshResult& b) { return a.speedup() < b.speedup(); });
+
+  out << "- **Lowest speedup:** " << minIt->name << " (" << std::fixed << std::setprecision(2) << minIt->speedup() << "x)" << std::endl;
+  out << "  - Avg faces: " << std::setprecision(1) << minIt->avgFaces()
+      << ", Iters/face: " << std::setprecision(3) << minIt->itersPerFace()
+      << ", Cache: " << std::setprecision(1) << minIt->cacheHitRate() << "%" << std::endl;
+  out << "- **Highest speedup:** " << maxIt->name << " (" << std::fixed << std::setprecision(2) << maxIt->speedup() << "x)" << std::endl;
+  out << "  - Avg faces: " << std::setprecision(1) << maxIt->avgFaces()
+      << ", Iters/face: " << std::setprecision(3) << maxIt->itersPerFace()
+      << ", Cache: " << std::setprecision(1) << maxIt->cacheHitRate() << "%" << std::endl;
+}
+
 void printVerboseStats(std::ostream& out, const MeshResult& r) {
   out << std::endl;
   out << "### " << r.name << " (" << formatNumber(r.vertices) << " vertices, "
@@ -276,9 +349,20 @@ void printVerboseStats(std::ostream& out, const MeshResult& r) {
   out << "- Ties: " << r.ties << " (" << std::fixed << std::setprecision(1)
       << (100.0 * r.ties / r.numPaths) << "%)" << std::endl;
   out << "- GFR avg iterations: " << std::fixed << std::setprecision(1)
-      << (double)r.gfrTotalIters / r.numPaths << std::endl;
+      << r.avgIters() << std::endl;
   out << "- FlipOut avg iterations: " << std::fixed << std::setprecision(1)
       << (double)r.flipoutTotalIters / r.numPaths << std::endl;
+  out << std::endl;
+  out << "**Investigation Stats:**" << std::endl;
+  out << "- Avg sleeve faces: " << std::fixed << std::setprecision(1) << r.avgFaces() << std::endl;
+  out << "- Iters/face ratio: " << std::fixed << std::setprecision(3) << r.itersPerFace() << std::endl;
+  out << "- Straightening improvement: " << std::fixed << std::setprecision(2)
+      << r.straighteningImprovement() << "%" << std::endl;
+  out << "- Cache hit rate: " << std::fixed << std::setprecision(1) << r.cacheHitRate()
+      << "% (" << formatNumber(r.cacheHits) << " hits, " << formatNumber(r.cacheMisses) << " misses)" << std::endl;
+  out << "- Timing: A*=" << std::fixed << std::setprecision(1) << r.aStarMs << "ms, "
+      << "Flatten=" << r.flattenMs << "ms, "
+      << "Straighten=" << r.straightenMs << "ms" << std::endl;
 }
 
 int main(int argc, char** argv) {
@@ -289,6 +373,7 @@ int main(int argc, char** argv) {
   std::string outputFile;
   std::vector<std::string> specificMeshes;
   bool verbose = false;
+  bool diagnostic = false;
 
   // Parse arguments
   for (int i = 1; i < argc; i++) {
@@ -305,6 +390,8 @@ int main(int argc, char** argv) {
       specificMeshes.push_back(argv[++i]);
     } else if (arg == "--verbose") {
       verbose = true;
+    } else if (arg == "--diagnostic") {
+      diagnostic = true;
     } else if (arg == "--help" || arg == "-h") {
       std::cout << "Usage: multi_mesh_benchmark [options]" << std::endl;
       std::cout << "  --meshes DIR    Mesh directory (default: C:/Dev/Colonel/Data/Meshes)" << std::endl;
@@ -312,7 +399,8 @@ int main(int argc, char** argv) {
       std::cout << "  --seed S        Random seed (default: 42)" << std::endl;
       std::cout << "  --output FILE   Output file (default: stdout)" << std::endl;
       std::cout << "  --mesh FILE     Specific mesh (can repeat)" << std::endl;
-      std::cout << "  --verbose       Show detailed stats" << std::endl;
+      std::cout << "  --verbose       Show detailed stats per mesh" << std::endl;
+      std::cout << "  --diagnostic    Show speedup investigation table" << std::endl;
       return 0;
     }
   }
@@ -379,6 +467,10 @@ int main(int argc, char** argv) {
   *out << std::endl;
   printMarkdownTable(*out, results);
   printAggregate(*out, results);
+
+  if (diagnostic) {
+    printDiagnosticTable(*out, results);
+  }
 
   if (verbose) {
     *out << std::endl;

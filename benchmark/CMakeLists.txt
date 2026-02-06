@@ -63,5 +63,14 @@ target_link_libraries(diagnose-facestrip geometry-central)
 add_executable(fan-direction-test fan_direction_test.cpp)
 target_link_libraries(fan-direction-test geometry-central)
 
+add_executable(cold-cache-benchmark cold_cache_benchmark.cpp)
+target_link_libraries(cold-cache-benchmark geometry-central)
+
+add_executable(epsilon-test epsilon_test.cpp)
+target_link_libraries(epsilon-test geometry-central)
+
+add_executable(epsilon-vs-flipout-test epsilon_vs_flipout_test.cpp)
+target_link_libraries(epsilon-vs-flipout-test geometry-central)
+
 # Add geometry central as a subproject
 add_subdirectory(../ "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")

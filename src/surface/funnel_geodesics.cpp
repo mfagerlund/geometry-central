@@ -1432,5 +1432,11 @@ CacheStats getCacheStats() {
   return stats;
 }
 
+void clearFunnelCache() {
+  if (funnel_internal::cachedPathfinder) {
+    funnel_internal::cachedPathfinder->clearCache();
+  }
+}
+
 } // namespace surface
 } // namespace geometrycentral
