@@ -70,6 +70,18 @@ struct MeshTestResult {
   double worstDiff;      // Worst case where GFR initial > Dijkstra (positive = bad)
   double avgDiff;        // Average (GFR initial - Dijkstra), negative = GFR shorter
   std::vector<FailureInfo> failures;
+
+  // vs Discrete metrics
+  double totalDijkstra;     // Sum of all Dijkstra path lengths
+  double totalFunnel;       // Sum of all initial funnel lengths
+  double totalGfrFinal;     // Sum of all final GFR path lengths
+
+  double funnelVsDijkstraPct() const {
+    return 100.0 * (totalDijkstra - totalFunnel) / totalDijkstra;
+  }
+  double gfrVsDijkstraPct() const {
+    return 100.0 * (totalDijkstra - totalGfrFinal) / totalDijkstra;
+  }
 };
 
 MeshTestResult testMesh(
@@ -84,6 +96,9 @@ MeshTestResult testMesh(
   result.numFailures = 0;
   result.worstDiff = 0;
   result.avgDiff = 0;
+  result.totalDijkstra = 0;
+  result.totalFunnel = 0;
+  result.totalGfrFinal = 0;
 
   // Load mesh
   std::unique_ptr<ManifoldSurfaceMesh> mesh;
@@ -124,11 +139,16 @@ MeshTestResult testMesh(
     // Compute GFR path (initial funnel distance is stored)
     auto gfrPath = computeFunnelGeodesic(*mesh, *geometry, v0, v1);
     double gfrInitial = gfrPath->initialFunnelLength();
+    double gfrFinal = gfrPath->length();
 
     // Compute FlipOut Dijkstra path (length before iterativeShorten)
     auto flipNetwork = FlipEdgeNetwork::constructFromDijkstraPath(*mesh, *geometry, v0, v1);
     double dijkstra = flipNetwork->length();
 
+    // Accumulate totals for vs-discrete metrics
+    result.totalDijkstra += dijkstra;
+    result.totalFunnel += gfrInitial;
+    result.totalGfrFinal += gfrFinal;
 
     double diff = gfrInitial - dijkstra;
     sumDiff += diff;
@@ -288,6 +308,32 @@ int main(int argc, char** argv) {
               << std::setw(12) << std::fixed << std::setprecision(6) << r.avgDiff
               << std::setw(12) << r.worstDiff << std::endl;
   }
+
+  std::cout << std::endl;
+
+  // vs Discrete summary table (for paper)
+  std::cout << "============================================" << std::endl;
+  std::cout << "VS DISCRETE PATH (Paper Table)" << std::endl;
+  std::cout << "============================================" << std::endl;
+  std::cout << std::endl;
+  std::cout << "| Mesh | Paths | Funnel vs Discrete | GFR vs Discrete |" << std::endl;
+  std::cout << "|------|-------|-------------------|-----------------|" << std::endl;
+
+  double sumFunnelPct = 0;
+  double sumGfrPct = 0;
+  for (const auto& r : results) {
+    std::cout << "| " << r.name
+              << " | " << r.numPaths
+              << " | " << std::fixed << std::setprecision(2) << r.funnelVsDijkstraPct() << "%"
+              << " | " << std::setprecision(2) << r.gfrVsDijkstraPct() << "%"
+              << " |" << std::endl;
+    sumFunnelPct += r.funnelVsDijkstraPct();
+    sumGfrPct += r.gfrVsDijkstraPct();
+  }
+  std::cout << std::endl;
+  std::cout << "**Average:** Funnel " << std::fixed << std::setprecision(2)
+            << (sumFunnelPct / results.size()) << "% shorter, "
+            << "GFR " << (sumGfrPct / results.size()) << "% shorter than discrete." << std::endl;
 
   std::cout << std::endl;
   if (totalFailures == 0) {
