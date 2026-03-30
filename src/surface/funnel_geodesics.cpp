@@ -46,6 +46,7 @@ void resetTimingStats() {
   totalFlipFailures = 0;
 }
 
+
 // ============================================================================
 // Main API
 // ============================================================================
@@ -1059,6 +1060,11 @@ std::vector<Face> buildFaceStripVeryDiscrete(
     return faces;
   }
 
+  // Edge-only mode: bypass trident entirely, use Dijkstra
+  if (very_discrete_geodesic::maxTridentDepth <= 0) {
+    return buildFaceStrip(mesh, geom, start, end);
+  }
+
   // Create or reuse cached pathfinder
   if (cachedMesh != &mesh || cachedGeom != &geom) {
     cachedPathfinder = std::unique_ptr<very_discrete_geodesic::CachedVeryDiscreteGeodesicPathfinder>(
@@ -1433,6 +1439,12 @@ CacheStats getCacheStats() {
     stats.cacheSize = funnel_internal::cachedPathfinder->getExplorationCacheSize();
   }
   return stats;
+}
+
+void clearCachedPathfinder() {
+  funnel_internal::cachedPathfinder.reset();
+  funnel_internal::cachedMesh = nullptr;
+  funnel_internal::cachedGeom = nullptr;
 }
 
 } // namespace surface

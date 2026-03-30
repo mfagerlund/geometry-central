@@ -1,6 +1,7 @@
 #include "geometrycentral/surface/funnel_geodesics.h"
 #include "geometrycentral/surface/very_discrete_geodesic.h"
 #include "geometrycentral/surface/exact_geodesics.h"
+#include "geometrycentral/surface/flip_geodesics.h"
 #include "geometrycentral/surface/manifold_surface_mesh.h"
 #include "geometrycentral/surface/meshio.h"
 #include "geometrycentral/surface/mesh_graph_algorithms.h"
@@ -1119,6 +1120,357 @@ TEST_F(FunnelGeodesicsSuite, DebugCppVsCsharpPair8) {
   std::cout << "\n5. MMP (exact): " << std::setprecision(10) << mmpDist << std::endl;
   std::cout << "   C# vs MMP:  " << ((csharpDist - mmpDist) / mmpDist * 100.0) << "% above exact" << std::endl;
   std::cout << "   C++ vs MMP: " << ((gfrPath->length() - mmpDist) / mmpDist * 100.0) << "% above exact" << std::endl;
+
+  std::cout << "\n====================================================================================================" << std::endl;
+}
+
+// ============================================================================
+// MMP Sweep - Validate GFR accuracy against exact geodesics on multiple meshes
+// Reports median, p95, and max error vs MMP for both GFR and FlipOut
+// ============================================================================
+
+TEST_F(FunnelGeodesicsSuite, MMPSweep) {
+  struct MeshSpec {
+    std::string filename;
+    size_t numPairs;
+  };
+
+  // Use meshes available in test assets + external mesh dir
+  std::vector<MeshSpec> meshes = {
+    {"Bunny.obj", 200},
+    {"spot.ply", 200},
+  };
+
+  // Also try larger meshes from the Colonel mesh directory
+  std::string externalDir = "C:/Dev/Colonel/Data/Meshes";
+  std::vector<MeshSpec> externalMeshes = {
+    {"pig.obj", 100},
+    {"stanford-bunny.obj", 100},
+    {"armadillo.obj", 50},
+  };
+
+  unsigned int seed = 42;
+
+  std::cout << "\n====================================================================================================";
+  std::cout << "\nMMP VALIDATION SWEEP";
+  std::cout << "\n====================================================================================================\n";
+
+  for (size_t mi = 0; mi < meshes.size() + externalMeshes.size(); mi++) {
+    std::string meshPath;
+    size_t numPairs;
+
+    if (mi < meshes.size()) {
+      meshPath = std::string(GC_TEST_ASSETS_ABS_PATH) + "/" + meshes[mi].filename;
+      numPairs = meshes[mi].numPairs;
+    } else {
+      auto& spec = externalMeshes[mi - meshes.size()];
+      meshPath = externalDir + "/" + spec.filename;
+      numPairs = spec.numPairs;
+    }
+
+    // Check file exists
+    std::ifstream testFile(meshPath);
+    if (!testFile.good()) {
+      std::cout << "\nSkipping " << meshPath << " (not found)" << std::endl;
+      continue;
+    }
+    testFile.close();
+
+    std::unique_ptr<ManifoldSurfaceMesh> meshPtr;
+    std::unique_ptr<VertexPositionGeometry> geomPtr;
+    std::tie(meshPtr, geomPtr) = readManifoldSurfaceMesh(meshPath);
+    ManifoldSurfaceMesh& mesh = *meshPtr;
+    VertexPositionGeometry& geom = *geomPtr;
+
+    std::string meshName = meshPath.substr(meshPath.find_last_of("/\\") + 1);
+    std::cout << "\n--- " << meshName << " (" << mesh.nVertices() << " vertices, "
+              << numPairs << " pairs) ---" << std::endl;
+
+    // Generate random pairs
+    std::mt19937 rng(seed);
+    std::uniform_int_distribution<size_t> dist(0, mesh.nVertices() - 1);
+
+    std::vector<double> gfrErrors, flipoutErrors;
+
+    for (size_t i = 0; i < numPairs; i++) {
+      size_t v0idx, v1idx;
+      do {
+        v0idx = dist(rng);
+        v1idx = dist(rng);
+      } while (v0idx == v1idx);
+
+      Vertex v0 = mesh.vertex(v0idx);
+      Vertex v1 = mesh.vertex(v1idx);
+
+      // GFR
+      auto gfrPath = computeFunnelGeodesic(mesh, geom, v0, v1);
+      double gfrDist = gfrPath->length();
+
+      // FlipOut
+      auto flipNetwork = FlipEdgeNetwork::constructFromDijkstraPath(mesh, geom, v0, v1);
+      flipNetwork->iterativeShorten();
+      double flipDist = flipNetwork->length();
+
+      // MMP exact
+      GeodesicAlgorithmExact mmp(mesh, geom);
+      mmp.propagate(v0);
+      double mmpDist = mmp.getDistance(v1);
+
+      if (mmpDist > 1e-10) {
+        gfrErrors.push_back((gfrDist - mmpDist) / mmpDist * 100.0);
+        flipoutErrors.push_back((flipDist - mmpDist) / mmpDist * 100.0);
+      }
+
+      if ((i + 1) % 50 == 0) std::cerr << "." << std::flush;
+    }
+    std::cerr << std::endl;
+
+    if (gfrErrors.empty()) continue;
+
+    // Sort for percentile computation
+    std::sort(gfrErrors.begin(), gfrErrors.end());
+    std::sort(flipoutErrors.begin(), flipoutErrors.end());
+
+    size_t n = gfrErrors.size();
+    size_t p50 = n / 2;
+    size_t p95 = std::min((size_t)(n * 0.95), n - 1);
+    size_t p99 = std::min((size_t)(n * 0.99), n - 1);
+
+    std::cout << std::fixed << std::setprecision(6);
+    std::cout << "  GFR vs MMP:     median=" << gfrErrors[p50]
+              << "%  p95=" << gfrErrors[p95]
+              << "%  p99=" << gfrErrors[p99]
+              << "%  max=" << gfrErrors[n - 1] << "%" << std::endl;
+    std::cout << "  FlipOut vs MMP: median=" << flipoutErrors[p50]
+              << "%  p95=" << flipoutErrors[p95]
+              << "%  p99=" << flipoutErrors[p99]
+              << "%  max=" << flipoutErrors[n - 1] << "%" << std::endl;
+
+    // Check: paths much shorter than MMP indicate a real bug.
+    // Small sub-MMP values (<0.5%) are expected MMP numerical precision limits.
+    for (size_t i = 0; i < n; i++) {
+      EXPECT_GE(gfrErrors[i], -0.5) << "GFR path >0.5% shorter than MMP on " << meshName << " pair " << i;
+    }
+  }
+
+  std::cout << "\n====================================================================================================" << std::endl;
+}
+
+// ============================================================================
+// Trident Ablation - Measure impact of exploration depth on quality and speed
+// Tests edge-only (Dijkstra), L1, L3, L4, L5 (full)
+// ============================================================================
+
+TEST_F(FunnelGeodesicsSuite, TridentAblation) {
+  std::string bunnyPath = std::string(GC_TEST_ASSETS_ABS_PATH) + "/Bunny.obj";
+  std::unique_ptr<ManifoldSurfaceMesh> meshPtr;
+  std::unique_ptr<VertexPositionGeometry> geomPtr;
+  std::tie(meshPtr, geomPtr) = readManifoldSurfaceMesh(bunnyPath);
+  ManifoldSurfaceMesh& mesh = *meshPtr;
+  VertexPositionGeometry& geom = *geomPtr;
+
+  BenchmarkPriority benchmarkScope;
+
+  const size_t numPairs = BUNNY_FLIPOUT_COUNT;
+
+  std::cout << "\n====================================================================================================";
+  std::cout << "\nTRIDENT ABLATION (Bunny, " << numPairs << " paths)";
+  std::cout << "\n====================================================================================================\n";
+
+  struct AblationResult {
+    std::string name;
+    int depth;
+    double totalTime;
+    double totalLength;
+    double totalIters;
+    size_t flipAttempts;
+    size_t flipFailures;
+  };
+
+  std::vector<AblationResult> ablations = {
+    {"Edge-only", 0, 0, 0, 0, 0, 0},
+    {"L1",        1, 0, 0, 0, 0, 0},
+    {"L3",        3, 0, 0, 0, 0, 0},
+    {"L4",        4, 0, 0, 0, 0, 0},
+    {"L5 (full)", 5, 0, 0, 0, 0, 0},
+  };
+
+  // Collect FlipOut total for comparison
+  double flipoutTotal = 0;
+  for (size_t i = 0; i < numPairs; i++) {
+    flipoutTotal += BUNNY_FLIPOUT_PAIRS[i].flipOutDistance;
+  }
+
+  for (auto& abl : ablations) {
+    // Set depth and force new pathfinder
+    very_discrete_geodesic::maxTridentDepth = abl.depth;
+    clearCachedPathfinder();
+    resetTimingStats();
+
+    // Warmup
+    for (size_t i = 0; i < 20; i++) {
+      const auto& p = BUNNY_FLIPOUT_PAIRS[i];
+      if (p.from >= mesh.nVertices() || p.to >= mesh.nVertices()) continue;
+      computeFunnelGeodesic(mesh, geom, mesh.vertex(p.from), mesh.vertex(p.to));
+    }
+    clearCachedPathfinder();
+    resetTimingStats();
+
+    // Timed run
+    auto start = std::chrono::high_resolution_clock::now();
+    for (size_t i = 0; i < numPairs; i++) {
+      const auto& p = BUNNY_FLIPOUT_PAIRS[i];
+      if (p.from >= mesh.nVertices() || p.to >= mesh.nVertices()) continue;
+      auto path = computeFunnelGeodesic(mesh, geom, mesh.vertex(p.from), mesh.vertex(p.to));
+      abl.totalLength += path->length();
+      abl.totalIters += path->iterationCount();
+    }
+    auto end = std::chrono::high_resolution_clock::now();
+    abl.totalTime = std::chrono::duration<double, std::milli>(end - start).count();
+
+    auto ts = getTimingStats();
+    abl.flipAttempts = ts.flipAttempts;
+    abl.flipFailures = ts.flipFailures;
+
+    std::cerr << "  " << abl.name << " done (" << abl.totalTime << " ms)" << std::endl;
+  }
+
+  // Restore default
+  very_discrete_geodesic::maxTridentDepth = 5;
+  clearCachedPathfinder();
+
+  // Print table
+  std::cout << std::endl;
+  std::cout << "| Mode | Time | Speedup vs L5 | Total Distance | vs FlipOut | Avg Iters | Flips (att/fail) |" << std::endl;
+  std::cout << "|------|------|---------------|----------------|------------|-----------|------------------|" << std::endl;
+
+  double l5Time = ablations.back().totalTime;
+  for (const auto& abl : ablations) {
+    double vsFlipout = (abl.totalLength - flipoutTotal) / flipoutTotal * 100.0;
+    double speedupVsL5 = l5Time / abl.totalTime;
+    double avgIters = abl.totalIters / (double)numPairs;
+
+    std::cout << "| " << std::left << std::setw(10) << abl.name
+              << " | " << std::right << std::fixed << std::setprecision(0) << std::setw(7) << abl.totalTime << " ms"
+              << " | " << std::setprecision(2) << std::setw(5) << speedupVsL5 << "x"
+              << " | " << std::setprecision(4) << std::setw(14) << abl.totalLength
+              << " | " << std::setprecision(3) << std::setw(8) << vsFlipout << "%"
+              << " | " << std::setprecision(1) << std::setw(9) << avgIters
+              << " | " << abl.flipAttempts << "/" << abl.flipFailures
+              << " |" << std::endl;
+  }
+
+  std::cout << "\n  FlipOut total distance: " << std::setprecision(4) << flipoutTotal << std::endl;
+  std::cout << "\n====================================================================================================" << std::endl;
+
+  // L5 should produce the shortest paths
+  EXPECT_LE(ablations.back().totalLength, ablations.front().totalLength);
+}
+
+// ============================================================================
+// Runtime Breakdown - Phase-by-phase timing on Bunny (1000 paths)
+// Reports A*, flatten/funnel, straightening, and overhead breakdown
+// ============================================================================
+
+TEST_F(FunnelGeodesicsSuite, RuntimeBreakdown) {
+  std::string bunnyPath = std::string(GC_TEST_ASSETS_ABS_PATH) + "/Bunny.obj";
+  std::unique_ptr<ManifoldSurfaceMesh> meshPtr;
+  std::unique_ptr<VertexPositionGeometry> geomPtr;
+  std::tie(meshPtr, geomPtr) = readManifoldSurfaceMesh(bunnyPath);
+  ManifoldSurfaceMesh& mesh = *meshPtr;
+  VertexPositionGeometry& geom = *geomPtr;
+
+  BenchmarkPriority benchmarkScope;
+
+  std::cout << "\n====================================================================================================";
+  std::cout << "\nRUNTIME BREAKDOWN (Bunny, " << BUNNY_FLIPOUT_COUNT << " paths)";
+  std::cout << "\n====================================================================================================\n";
+
+  // Warmup
+  clearCachedPathfinder();
+  for (size_t i = 0; i < 50; i++) {
+    const auto& p = BUNNY_FLIPOUT_PAIRS[i];
+    if (p.from >= mesh.nVertices() || p.to >= mesh.nVertices()) continue;
+    computeFunnelGeodesic(mesh, geom, mesh.vertex(p.from), mesh.vertex(p.to));
+  }
+
+  // Cold cache run (fresh pathfinder, no cached explorations)
+  clearCachedPathfinder();
+  resetTimingStats();
+  auto coldStart = std::chrono::high_resolution_clock::now();
+  for (size_t i = 0; i < BUNNY_FLIPOUT_COUNT; i++) {
+    const auto& p = BUNNY_FLIPOUT_PAIRS[i];
+    if (p.from >= mesh.nVertices() || p.to >= mesh.nVertices()) continue;
+    computeFunnelGeodesic(mesh, geom, mesh.vertex(p.from), mesh.vertex(p.to));
+  }
+  auto coldEnd = std::chrono::high_resolution_clock::now();
+  double coldTotalMs = std::chrono::duration<double, std::milli>(coldEnd - coldStart).count();
+  auto coldTiming = getTimingStats();
+  auto coldCache = getCacheStats();
+
+  // Warm cache run (pathfinder already populated from cold run)
+  resetTimingStats();
+  auto warmStart = std::chrono::high_resolution_clock::now();
+  for (size_t i = 0; i < BUNNY_FLIPOUT_COUNT; i++) {
+    const auto& p = BUNNY_FLIPOUT_PAIRS[i];
+    if (p.from >= mesh.nVertices() || p.to >= mesh.nVertices()) continue;
+    computeFunnelGeodesic(mesh, geom, mesh.vertex(p.from), mesh.vertex(p.to));
+  }
+  auto warmEnd = std::chrono::high_resolution_clock::now();
+  double warmTotalMs = std::chrono::duration<double, std::milli>(warmEnd - warmStart).count();
+  auto warmTiming = getTimingStats();
+  auto warmCache = getCacheStats();
+
+  // Print cold-cache breakdown
+  std::cout << "\n  COLD CACHE (first batch):" << std::endl;
+  std::cout << "    Total:          " << std::fixed << std::setprecision(1) << coldTotalMs << " ms" << std::endl;
+  std::cout << "    A* pathfinding: " << coldTiming.aStarMs << " ms ("
+            << (coldTiming.aStarMs / coldTotalMs * 100.0) << "%)" << std::endl;
+  std::cout << "    Flatten/Funnel: " << coldTiming.flattenMs << " ms ("
+            << (coldTiming.flattenMs / coldTotalMs * 100.0) << "%)" << std::endl;
+  std::cout << "    Straightening:  " << coldTiming.straightenMs << " ms ("
+            << (coldTiming.straightenMs / coldTotalMs * 100.0) << "%)" << std::endl;
+  double coldOverhead = coldTotalMs - coldTiming.aStarMs - coldTiming.flattenMs - coldTiming.straightenMs;
+  std::cout << "    Overhead:       " << coldOverhead << " ms ("
+            << (coldOverhead / coldTotalMs * 100.0) << "%)" << std::endl;
+  std::cout << "    Cache:          " << coldCache.hits << " hits / " << coldCache.misses << " misses ("
+            << (coldCache.hits + coldCache.misses > 0 ? 100.0 * coldCache.hits / (coldCache.hits + coldCache.misses) : 0)
+            << "% hit rate)" << std::endl;
+  std::cout << "    Flips:          " << coldTiming.flipAttempts << " attempts, "
+            << coldTiming.flipFailures << " failures ("
+            << (coldTiming.flipAttempts > 0 ? 100.0 * coldTiming.flipFailures / coldTiming.flipAttempts : 0)
+            << "% fail rate)" << std::endl;
+
+  // Print warm-cache breakdown
+  std::cout << "\n  WARM CACHE (second batch, same paths):" << std::endl;
+  std::cout << "    Total:          " << warmTotalMs << " ms" << std::endl;
+  std::cout << "    A* pathfinding: " << warmTiming.aStarMs << " ms ("
+            << (warmTiming.aStarMs / warmTotalMs * 100.0) << "%)" << std::endl;
+  std::cout << "    Flatten/Funnel: " << warmTiming.flattenMs << " ms ("
+            << (warmTiming.flattenMs / warmTotalMs * 100.0) << "%)" << std::endl;
+  std::cout << "    Straightening:  " << warmTiming.straightenMs << " ms ("
+            << (warmTiming.straightenMs / warmTotalMs * 100.0) << "%)" << std::endl;
+  double warmOverhead = warmTotalMs - warmTiming.aStarMs - warmTiming.flattenMs - warmTiming.straightenMs;
+  std::cout << "    Overhead:       " << warmOverhead << " ms ("
+            << (warmOverhead / warmTotalMs * 100.0) << "%)" << std::endl;
+  std::cout << "    Cache:          " << warmCache.hits << " hits / " << warmCache.misses << " misses ("
+            << (warmCache.hits + warmCache.misses > 0 ? 100.0 * warmCache.hits / (warmCache.hits + warmCache.misses) : 0)
+            << "% hit rate)" << std::endl;
+
+  // Summary comparison
+  std::cout << "\n  COLD vs WARM:" << std::endl;
+  std::cout << "    Speedup:       " << std::setprecision(2) << (coldTotalMs / warmTotalMs) << "x" << std::endl;
+  std::cout << "    A* speedup:    " << (coldTiming.aStarMs / warmTiming.aStarMs) << "x" << std::endl;
+
+  // Per-path latency
+  std::cout << "\n  PER-PATH LATENCY:" << std::endl;
+  std::cout << "    Cold: " << std::setprecision(3) << (coldTotalMs / BUNNY_FLIPOUT_COUNT) << " ms/path" << std::endl;
+  std::cout << "    Warm: " << (warmTotalMs / BUNNY_FLIPOUT_COUNT) << " ms/path" << std::endl;
+
+  // Memory
+  std::cout << "\n  CACHE MEMORY:" << std::endl;
+  std::cout << "    Exploration cache entries: " << warmCache.cacheSize << std::endl;
+  std::cout << "    Estimated size: ~" << (warmCache.cacheSize * sizeof(very_discrete_geodesic::ExplorationResult) / 1024) << " KB" << std::endl;
 
   std::cout << "\n====================================================================================================" << std::endl;
 }

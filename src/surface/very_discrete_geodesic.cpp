@@ -15,6 +15,8 @@ namespace geometrycentral {
 namespace surface {
 namespace very_discrete_geodesic {
 
+int maxTridentDepth = 5;
+
 // ============================================================================
 // Helper: V2.ComputeTriangleApex
 // public static Vector2 ComputeTriangleApex(Vector2 a, Vector2 b, float distA, float distB, bool pickPositiveY)
@@ -367,20 +369,31 @@ ExplorationResult explore(Corner corner, VertexPositionGeometry& geom) {
   base.computed = true;
   base.isBoundary = false;
 
-  // Unfold the trident: left (N,P,N,P), right (P,N,P,N), middle branches from L3
-  UnfoldLevel L2L  = unfoldNext(base, Tr::N, geom);
-  UnfoldLevel L3L  = unfoldNext(L2L,  Tr::P, geom);
-  UnfoldLevel L4L  = unfoldNext(L3L,  Tr::N, geom);
-  UnfoldLevel L5L  = unfoldNext(L4L,  Tr::P, geom);
-  UnfoldLevel L4LM = unfoldNext(L3L,  Tr::P, geom);  // Middle branch from L3L
-  UnfoldLevel L5LM = unfoldNext(L4LM, Tr::N, geom);
+  // Unfold the trident based on configured depth (1-5)
+  // L1 = base (always), L2 = depth>=2, L3 = depth>=3, L4 = depth>=4, L5+middle = depth>=5
+  UnfoldLevel L2L{}, L3L{}, L4L{}, L5L{}, L4LM{}, L5LM{};
+  UnfoldLevel L2R{}, L3R{}, L4R{}, L5R{}, L4RM{}, L5RM{};
 
-  UnfoldLevel L2R  = unfoldNext(base, Tr::P, geom);
-  UnfoldLevel L3R  = unfoldNext(L2R,  Tr::N, geom);
-  UnfoldLevel L4R  = unfoldNext(L3R,  Tr::P, geom);
-  UnfoldLevel L5R  = unfoldNext(L4R,  Tr::N, geom);
-  UnfoldLevel L4RM = unfoldNext(L3R,  Tr::N, geom);  // Middle branch from L3R
-  UnfoldLevel L5RM = unfoldNext(L4RM, Tr::P, geom);
+  if (maxTridentDepth >= 2) {
+    L2L = unfoldNext(base, Tr::N, geom);
+    L2R = unfoldNext(base, Tr::P, geom);
+  }
+  if (maxTridentDepth >= 3) {
+    L3L = unfoldNext(L2L, Tr::P, geom);
+    L3R = unfoldNext(L2R, Tr::N, geom);
+  }
+  if (maxTridentDepth >= 4) {
+    L4L = unfoldNext(L3L, Tr::N, geom);
+    L4R = unfoldNext(L3R, Tr::P, geom);
+  }
+  if (maxTridentDepth >= 5) {
+    L5L  = unfoldNext(L4L,  Tr::P, geom);
+    L4LM = unfoldNext(L3L,  Tr::P, geom);  // Middle branch from L3L
+    L5LM = unfoldNext(L4LM, Tr::N, geom);
+    L5R  = unfoldNext(L4R,  Tr::N, geom);
+    L4RM = unfoldNext(L3R,  Tr::N, geom);  // Middle branch from L3R
+    L5RM = unfoldNext(L4RM, Tr::P, geom);
+  }
 
   // Check reachability using accumulated portals
   auto check = [&](CandidateName name, const UnfoldLevel& lvl) -> CandidateVertex {

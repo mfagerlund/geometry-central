@@ -84,6 +84,10 @@ struct WalkResult {
 
 constexpr double HEURISTIC_WEIGHT = 1.0;
 
+// Configurable trident depth (1-5, default 5).
+// 1=L1 only, 3=L3, 4=L4, 5=L5 (full). 0=edge-only (bypasses trident).
+extern int maxTridentDepth;
+
 // ============================================================================
 // Explorer
 // ============================================================================

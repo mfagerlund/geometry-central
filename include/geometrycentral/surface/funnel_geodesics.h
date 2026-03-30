@@ -50,6 +50,9 @@ struct TimingStats {
 TimingStats getTimingStats();
 void resetTimingStats();
 
+/// Clear the static cached pathfinder (needed when changing trident depth)
+void clearCachedPathfinder();
+
 // ============================================================================
 // Result class
 // ============================================================================
