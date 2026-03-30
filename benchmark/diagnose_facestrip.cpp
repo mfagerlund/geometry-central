@@ -90,12 +90,8 @@ int main(int argc, char** argv) {
     std::cout << "  V" << step.from.getIndex() << " -> V" << step.to.getIndex()
               << ": distance=" << step.distance
               << (step.isExplorerJump ? " (L5 jump)" : " (edge)")
-              << ", crossedFaces=[";
-    for (size_t i = 0; i < step.crossedFaces.size(); i++) {
-      if (i > 0) std::cout << ",";
-      std::cout << "F" << step.crossedFaces[i].getIndex();
-    }
-    std::cout << "]" << std::endl;
+              << ", candidate=" << static_cast<int>(step.candidateName)
+              << std::endl;
   }
 
   std::cout << "Final sleeve faces: " << facesVDG.size() << std::endl;

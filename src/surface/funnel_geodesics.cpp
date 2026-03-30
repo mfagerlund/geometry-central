@@ -114,7 +114,6 @@ std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
   auto straightenStart = std::chrono::high_resolution_clock::now();
 
   // Phase 8: Iterative straightening with phase-based optimization
-  // Port of C# InterativeStraightener.StraightenWithPhases()
   //
   // Each phase tries all corners; phases repeat until no improvement.
   // This guarantees local optimality: if any single flip could improve the path,
@@ -193,6 +192,21 @@ std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
 
         // Apply flip speculatively
         auto newFaces = funnel_internal::applyFlip(result->sleeveFaces, action);
+
+        // Validate strip connectivity after splice
+        bool stripValid = true;
+        for (size_t fi = 1; fi < newFaces.size(); fi++) {
+          bool adjacent = false;
+          for (Halfedge he : newFaces[fi - 1].adjacentHalfedges()) {
+            if (he.twin().face() == newFaces[fi]) { adjacent = true; break; }
+          }
+          if (!adjacent) { stripValid = false; break; }
+        }
+        if (!stripValid) {
+          rejectedPhase[idx] = phase;
+          continue;
+        }
+
         auto newFlatPos = funnel_internal::flattenSleeve(newFaces, startVert, geom);
         auto newPortals = funnel_internal::buildPortals(newFaces, newFlatPos);
         auto newFunnel = funnel_internal::runFunnel(newPortals, entry2D, newFlatPos[endVert]);
@@ -391,7 +405,6 @@ static Vector2 circleIntersectPositiveY(Vector2 c1, double r1, Vector2 c2, doubl
 
 // ----------------------------------------------------------------------------
 // Phase 1: Flatten sleeve to 2D
-// Port of FunnelAlgorithm.FlattenFaceStripD() from C#
 // ----------------------------------------------------------------------------
 VertexData<Vector2> flattenSleeve(
     const std::vector<Face>& faces,
@@ -530,7 +543,6 @@ VertexData<Vector2> flattenSleeve(
 
 // ----------------------------------------------------------------------------
 // Phase 2: Build portals
-// Port of Sleeve.BuildPortalsFullList() from C#
 // ----------------------------------------------------------------------------
 std::vector<Portal> buildPortals(
     const std::vector<Face>& faces,
@@ -622,7 +634,6 @@ static inline double triArea2D(Vector2 a, Vector2 b, Vector2 c) {
 
 // ----------------------------------------------------------------------------
 // Phase 3: Funnel algorithm
-// Port of FunnelAlgorithm.PopulateEager() from C# (simplified version)
 // Lee-Preparata algorithm for shortest path through a simple polygon
 // ----------------------------------------------------------------------------
 FunnelResult runFunnel(
@@ -757,12 +768,11 @@ FunnelResult runFunnel(
 
 // ----------------------------------------------------------------------------
 // Phase 4: Build face strip from Dijkstra path (Walk-based approach)
-// Port of FaceStripWalker.cs - uses halfedge topology to walk around vertices
+// Walk halfedge fan around a vertex
 // ----------------------------------------------------------------------------
 
 enum class WalkDirection { Clockwise, CounterClockwise };
 
-// Determine walk direction based on turn at a vertex (signed angle test)
 static WalkDirection determineWalkDirection(
     Vector3 prevPos, Vector3 currPos, Vector3 nextPos, Vector3 normal) {
   Vector3 incoming = prevPos - currPos;
@@ -868,19 +878,15 @@ std::vector<Face> buildFaceStrip(
   std::vector<Halfedge> edgePath = shortestEdgePath(geom, start, end);
 
   if (edgePath.empty()) {
-    std::cerr << "DEBUG: shortestEdgePath returned empty for V" << start.getIndex()
-              << " -> V" << end.getIndex() << std::endl;
     // Start and end on same face
     for (Face f : start.adjacentFaces()) {
       for (Vertex v : f.adjacentVertices()) {
         if (v == end) {
-          std::cerr << "DEBUG: Found shared face F" << f.getIndex() << std::endl;
           faces.push_back(f);
           return faces;
         }
       }
     }
-    std::cerr << "DEBUG: No shared face found - returning empty" << std::endl;
     return faces;
   }
 
@@ -1119,7 +1125,6 @@ std::vector<Face> buildFaceStripVeryDiscrete(
 
 // ----------------------------------------------------------------------------
 // Phase 5: Analyze corners
-// Port of WaypointCornerAnalyzer.Populate() from C#
 // ----------------------------------------------------------------------------
 std::vector<WaypointCorner> analyzeCorners(
     const std::vector<Face>& faces,
@@ -1184,7 +1189,7 @@ std::vector<WaypointCorner> analyzeCorners(
 
     WaypointCorner corner;
     corner.vertex = vertex;
-    corner.faceIndex = 0;  // TODO: Find actual face index
+    corner.faceIndex = 0;
     corner.angleErrorDeg = angleErrorDeg;
 
     // Find which face in the strip contains this vertex
@@ -1211,7 +1216,9 @@ static std::vector<Face> walkFanToFace(Halfedge startHe, Face exitFace, bool wal
   std::vector<Face> result;
   Halfedge current = startHe;
 
-  for (int step = 0; step < 50; step++) {
+  // Vertex valence bounds the fan size; no face can appear twice
+  int maxSteps = static_cast<int>(startHe.vertex().degree());
+  for (int step = 0; step < maxSteps; step++) {
     if (!current.isInterior()) break;
 
     Face face = current.face();
@@ -1231,13 +1238,12 @@ static std::vector<Face> walkFanToFace(Halfedge startHe, Face exitFace, bool wal
     current = twin;
   }
 
-  // C# returns partial result (what was collected) even if didn't reach exitFace
-  return result;
+  // Did not reach exitFace - return empty to signal failure
+  return {};
 }
 
 // ----------------------------------------------------------------------------
 // Phase 6: Compute flip action
-// Port of WaypointCornerFlipAction.Compute() from C#
 //
 // A corner flip replaces faces around a waypoint vertex with alternate faces
 // on the "other side" of the vertex. This allows the path to take a different
@@ -1328,7 +1334,6 @@ FlipAction computeFlipAction(
   std::vector<Face> walkA = walkFanToFace(startA, exitFace, true);
   std::vector<Face> walkB = walkFanToFace(startB, exitFace, false);
 
-  // C# checks overlap with removeFaces only, NOT with entry/exit faces
   // Build removeFaces set (faces strictly between entry and exit)
   std::set<Face> removeFaceSet;
   for (const Face& f : action.removeFaces) {
@@ -1348,7 +1353,6 @@ FlipAction computeFlipAction(
     walkB.clear();
   }
 
-  // C# checks: aOverlapsRemove = walkA.Any(f => removeFaceSet.Contains(f))
   // Check for overlap with removeFaces (not the full sleeve range)
   if (aValid) {
     for (Face f : walkA) {
@@ -1378,7 +1382,6 @@ FlipAction computeFlipAction(
 
 // ----------------------------------------------------------------------------
 // Phase 7: Apply flip
-// Port of Sleeve.ComputeNewFaces() from C#
 //
 // Splices addFaces into the sleeve between spliceAfterIndex and spliceBeforeIndex,
 // removing any intermediate faces.

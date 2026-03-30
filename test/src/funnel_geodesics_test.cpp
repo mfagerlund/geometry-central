@@ -558,7 +558,7 @@ TEST_F(FunnelGeodesicsSuite, VeryDiscreteExplorer) {
   for (Corner c : v0.adjacentCorners()) {
     ExplorationResult result = explore(c, geom);
     // If L1 is reachable, we found a valid corner
-    if (result.L1.isReachable) {
+    if (result[CandidateName::L1].isReachable) {
       foundCorner = true;
     }
     break;
@@ -745,7 +745,8 @@ TEST_F(FunnelGeodesicsSuite, VeryDiscreteExplorerL5) {
     ExplorationResult result = explore(c, geom);
 
     // Should find some reachable candidates on a valid mesh
-    size_t count = result.getReachableCandidates().size();
+    size_t count = 0;
+    for (const auto& c : result.candidates) { if (c.isReachable) count++; }
     EXPECT_GT(count, 0);
     break; // One corner is enough for this test
   }

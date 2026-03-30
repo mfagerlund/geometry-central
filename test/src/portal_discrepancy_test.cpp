@@ -91,8 +91,8 @@ TEST_F(PortalDiscrepancySuite, BunnyDeepJumpAlignment) {
   for (Corner corner : mesh.corners()) {
     vdg::ExplorationResult exploreResult = vdg::explore(corner, geom);
 
-    for (const vdg::CandidateVertex& candidate : exploreResult.getReachableCandidates()) {
-      if (!candidate.hasVertex()) continue;
+    for (const vdg::CandidateVertex& candidate : exploreResult.candidates) {
+      if (!candidate.hasVertex() || !candidate.isReachable) continue;
 
       // Only check deep jumps (L3+)
       if (candidate.name < vdg::CandidateName::L3L) continue;
@@ -244,15 +244,17 @@ TEST_F(PortalDiscrepancySuite, BunnyPathDeepJumpAlignment) {
     for (const vdg::PathStep& step : result.steps) {
       if (!step.isExplorerJump) continue;
       if (step.candidateName < vdg::CandidateName::L3L) continue;
-      if (step.crossedFaces.empty()) continue;
+
+      std::vector<Face> crossedFaces = vdg::getCrossedFaces(step.sourceCorner, step.candidateName);
+      if (crossedFaces.empty()) continue;
 
       totalDeepJumps++;
 
       Vertex entry = step.from;
       Vertex target = step.to;
 
-      VertexData<Vector2> flatPos = funnel::flattenSleeve(step.crossedFaces, entry, geom);
-      std::vector<funnel::Portal> portals = funnel::buildPortals(step.crossedFaces, flatPos);
+      VertexData<Vector2> flatPos = funnel::flattenSleeve(crossedFaces, entry, geom);
+      std::vector<funnel::Portal> portals = funnel::buildPortals(crossedFaces, flatPos);
 
       if (portals.empty()) {
         invalidJumps++;
@@ -335,8 +337,8 @@ TEST_F(PortalDiscrepancySuite, MultiMeshAlignment) {
       Corner corner = allCorners[ci];
       vdg::ExplorationResult exploreResult = vdg::explore(corner, geom);
 
-      for (const vdg::CandidateVertex& candidate : exploreResult.getReachableCandidates()) {
-        if (!candidate.hasVertex()) continue;
+      for (const vdg::CandidateVertex& candidate : exploreResult.candidates) {
+        if (!candidate.hasVertex() || !candidate.isReachable) continue;
         if (candidate.name < vdg::CandidateName::L3L) continue;
 
         totalDeepJumps++;
@@ -447,8 +449,8 @@ TEST_F(PortalDiscrepancySuite, FoxDebug) {
     Corner corner = allCorners[ci];
     vdg::ExplorationResult exploreResult = vdg::explore(corner, geom);
 
-    for (const vdg::CandidateVertex& candidate : exploreResult.getReachableCandidates()) {
-      if (!candidate.hasVertex()) continue;
+    for (const vdg::CandidateVertex& candidate : exploreResult.candidates) {
+      if (!candidate.hasVertex() || !candidate.isReachable) continue;
       if (candidate.name < vdg::CandidateName::L3L) continue;
       if (foundDiscrepancy >= 1) break;
 

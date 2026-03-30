@@ -5,45 +5,10 @@
 // An alternative to FlipOut for computing geodesic paths on triangle meshes.
 // Uses sleeve refinement and quality-gated corner flipping instead of
 // intrinsic edge flipping.
-//
-// Reference: See docs/GFR_PORT_PLAN.md for algorithm details.
-//
-// Ported from C# implementation in Colonel.Meshing.GreedyFunnelRefinement
 
 #include "geometrycentral/surface/manifold_surface_mesh.h"
 #include "geometrycentral/surface/vertex_position_geometry.h"
 #include "geometrycentral/surface/surface_point.h"
-// C# counterparts:
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/CachedGreedyFunnelRefinementPathfinder.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/FlipOutComparisonTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/GeodesicComparisonTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/GeodesicTestBase.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/GreedyFunnelRefinementPathfinder.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/IterativeStraightener/CornerAnalyzerRenderer.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/IterativeStraightener/InterativeStraightener.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/IterativeStraightener/InterativeStraightenerTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/IterativeStraightener/PartialFunnelRecomputationTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/IterativeStraightener/WaypointCorner.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/IterativeStraightener/WaypointCornerAnalyzer.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/IterativeStraightener/WaypointCornerAnalyzerTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/IterativeStraightener/WaypointCornerFlipAction.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/RandomPathStressTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/DepthComparisonTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/FlatVertex.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/FlipActionVisualizationTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/FlipRoundTripTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/GeodesicPathJoiner.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/Portal.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/PortalCrossing.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/ShortestEdgePathfinder.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/Sleeve.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/SleeveBadPathsFinderTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/SleeveFlipVisualizationTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/SleevePerformanceTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/SleeveRegressionTests.cs
-// - C:/Dev/Colonel/Colonel.Meshing/GreedyFunnelRefinement/SleeveBuilding/SleeveTests.cs
-
-
 #include <memory>
 #include <vector>
 
@@ -57,24 +22,6 @@ class FunnelGeodesicPath;
 // Main API
 // ============================================================================
 
-/// Strategy for selecting which corner to flip during straightening.
-enum class FlipStrategy {
-  /// Always pick the globally most acute corner (quality-gated).
-  CornerGreedy,
-  /// Flip most acute corner, then flip newly exposed vertices once (ungated).
-  WedgeGreedy,
-  /// Quality-gated corner greedy with a short coherent follow-up window.
-  CoherentMiniWedge
-};
-
-/// Options for GFR straightening behavior.
-struct FunnelGeodesicOptions {
-  FlipStrategy strategy = FlipStrategy::CornerGreedy;
-  size_t maxIterations = 20000;
-  size_t coherentMiniWedgeDepth = 1;
-  size_t coherentMiniWedgeMaxCandidates = 64;
-};
-
 /// Compute a geodesic path between two vertices using Funnel Refinement.
 /// This is the main entry point - mirrors FlipEdgeNetwork::constructFromDijkstraPath()
 std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
@@ -82,14 +29,6 @@ std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
     VertexPositionGeometry& geom,
     Vertex startVert,
     Vertex endVert);
-
-/// Compute a geodesic path with custom options (strategy, limits).
-std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
-    ManifoldSurfaceMesh& mesh,
-    VertexPositionGeometry& geom,
-    Vertex startVert,
-    Vertex endVert,
-    const FunnelGeodesicOptions& options);
 
 /// Get cache statistics for the VeryDiscreteGeodesic pathfinder (for debugging)
 struct CacheStats {
@@ -105,7 +44,6 @@ struct TimingStats {
   double flattenMs = 0;
   double straightenMs = 0;
   size_t pathCount = 0;
-  // HYPOTHESIS 2: Flip discovery stats
   size_t flipAttempts = 0;
   size_t flipFailures = 0;
 };
@@ -152,8 +90,6 @@ private:
 
   friend std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
       ManifoldSurfaceMesh&, VertexPositionGeometry&, Vertex, Vertex);
-  friend std::unique_ptr<FunnelGeodesicPath> computeFunnelGeodesic(
-      ManifoldSurfaceMesh&, VertexPositionGeometry&, Vertex, Vertex, const FunnelGeodesicOptions&);
 };
 
 // ============================================================================
@@ -186,8 +122,6 @@ struct WaypointCorner {
   Vertex vertex;
   size_t faceIndex;
   double angleErrorDeg;
-  // C#: public bool WantToFlip() => AngleErrorDeg > 0 && CanStraighten;
-  // Note: CanStraighten is checked in computeFlipAction (canFlip)
   bool wantsToFlip() const { return angleErrorDeg > 0; }
 };
 

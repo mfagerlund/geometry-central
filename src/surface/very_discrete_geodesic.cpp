@@ -5,7 +5,6 @@
 #include "geometrycentral/surface/very_discrete_geodesic.h"
 
 #include <cmath>
-#include <algorithm>
 #include <limits>
 
 #ifndef M_PI
@@ -18,7 +17,6 @@ namespace very_discrete_geodesic {
 
 // ============================================================================
 // Helper: V2.ComputeTriangleApex
-// C# from Colonel.Math.V2:
 // public static Vector2 ComputeTriangleApex(Vector2 a, Vector2 b, float distA, float distB, bool pickPositiveY)
 // ============================================================================
 Vector2 computeTriangleApex(Vector2 a, Vector2 b, double distA, double distB, bool pickPositiveY) {
@@ -60,8 +58,7 @@ Vector2 computeTriangleApex(Vector2 a, Vector2 b, double distA, double distB, bo
 }
 
 // ============================================================================
-// FaceStripUtils - Line-by-line port
-// C# from FaceStripUtils.cs
+// Face strip utilities
 // ============================================================================
 
 Face getSharedFace(Vertex v1, Vertex v2) {
@@ -132,7 +129,6 @@ bool faceContainsVertex(Face face, Vertex vertex) {
 
 Halfedge findHalfedgeToVertex(Face face, Vertex vertex) {
   for (Halfedge he : face.adjacentHalfedges()) {
-    // Note: C# he.Next.Vertex is the tip of he, which is he.tipVertex() in geometry-central
     if (he.tipVertex() == vertex) {
       return he;
     }
@@ -142,7 +138,6 @@ Halfedge findHalfedgeToVertex(Face face, Vertex vertex) {
 
 Halfedge findHalfedgeFromVertex(Face face, Vertex vertex) {
   for (Halfedge he : face.adjacentHalfedges()) {
-    // Note: C# he.Vertex is the tail of he, which is he.tailVertex() in geometry-central
     if (he.tailVertex() == vertex) {
       return he;
     }
@@ -151,8 +146,7 @@ Halfedge findHalfedgeFromVertex(Face face, Vertex vertex) {
 }
 
 // ============================================================================
-// VeryDiscreteGeodesicExplorerHelper - Line-by-line port
-// C# from VeryDiscreteGeodesicExplorerHelper.cs
+// Explorer geometry helpers
 // ============================================================================
 
 bool segmentCrossesPortal(Vector2 v0, Vector2 target, Vector2 a, Vector2 b, double eps) {
@@ -166,7 +160,6 @@ bool segmentCrossesPortal(Vector2 v0, Vector2 target, Vector2 a, Vector2 b, doub
 
   // Opposite signs = crosses (product negative)
   // Product near zero = grazes endpoint (also valid, handles numerical precision)
-  // Matches C# implementation exactly
   return crossA * crossB <= eps;
 }
 
@@ -244,21 +237,16 @@ static CandidateVertex makeUnreachable(CandidateName name) {
 
 // Block all candidates in an ExplorationResult
 static void blockAllCandidates(ExplorationResult& result) {
-  result.L1 = makeUnreachable(CandidateName::L1);
-  result.L2L = makeUnreachable(CandidateName::L2L);
-  result.L2R = makeUnreachable(CandidateName::L2R);
-  result.L3L = makeUnreachable(CandidateName::L3L);
-  result.L3R = makeUnreachable(CandidateName::L3R);
-  result.L4L = makeUnreachable(CandidateName::L4L);
-  result.L4R = makeUnreachable(CandidateName::L4R);
-  result.L5L = makeUnreachable(CandidateName::L5L);
-  result.L5R = makeUnreachable(CandidateName::L5R);
-  result.L5LM = makeUnreachable(CandidateName::L5LM);
-  result.L5RM = makeUnreachable(CandidateName::L5RM);
+  for (size_t i = 0; i < NUM_CANDIDATES; i++) {
+    result.candidates[i] = makeUnreachable(static_cast<CandidateName>(i));
+  }
 }
 
 // Portal pair for reachability checking
 struct Portal { Vector2 a, b; };
+
+// Halfedge transition direction: N = he.next().twin(), P = he.next().next().twin()
+enum class Tr : uint8_t { N, P };
 
 // Unified reachability check for 1-5 portals
 static CandidateVertex checkReachability(CandidateName name, Vertex vertex, Vector2 flatV0,
@@ -284,38 +272,44 @@ static CandidateVertex checkReachability(CandidateName name, Vertex vertex, Vect
   return c;
 }
 
-// Convenience wrappers for checkReachability with 1-5 portals
-CandidateVertex checkReachability1(CandidateName name, Vertex vertex, Vector2 flatV0, Vector2 flatTarget, Face targetFace,
-                                   Vector2 p1a, Vector2 p1b, double scaleTolerance) {
-  Portal portals[] = {{p1a, p1b}};
-  return checkReachability(name, vertex, flatV0, flatTarget, targetFace, portals, 1, scaleTolerance);
-}
+// State for one level of the trident unfolding tree.
+// Accumulates portals so reachability can be checked directly.
+struct UnfoldLevel {
+  Halfedge he;
+  Face face;
+  Vertex apex;
+  Vector2 flat_he_a, flat_he_b, flat_apex;
+  Portal portals[5];
+  uint8_t portalCount = 0;
+  bool computed = false;
+  bool isBoundary = true;
+};
 
-CandidateVertex checkReachability2(CandidateName name, Vertex vertex, Vector2 flatV0, Vector2 flatTarget, Face targetFace,
-                                   Vector2 p1a, Vector2 p1b, Vector2 p2a, Vector2 p2b, double scaleTolerance) {
-  Portal portals[] = {{p1a, p1b}, {p2a, p2b}};
-  return checkReachability(name, vertex, flatV0, flatTarget, targetFace, portals, 2, scaleTolerance);
-}
+// Unfold one face in direction N (he.next().twin()) or P (he.next().next().twin()).
+// If prev is boundary or not computed, returns an uncommitted level.
+static UnfoldLevel unfoldNext(const UnfoldLevel& prev, Tr direction, VertexPositionGeometry& geom) {
+  UnfoldLevel next;
+  if (!prev.computed || prev.isBoundary) return next;
 
-CandidateVertex checkReachability3(CandidateName name, Vertex vertex, Vector2 flatV0, Vector2 flatTarget, Face targetFace,
-                                   Vector2 p1a, Vector2 p1b, Vector2 p2a, Vector2 p2b, Vector2 p3a, Vector2 p3b,
-                                   double scaleTolerance) {
-  Portal portals[] = {{p1a, p1b}, {p2a, p2b}, {p3a, p3b}};
-  return checkReachability(name, vertex, flatV0, flatTarget, targetFace, portals, 3, scaleTolerance);
-}
+  next.he = (direction == Tr::N) ? prev.he.next().twin() : prev.he.next().next().twin();
+  next.face = next.he.face();
+  next.isBoundary = next.face.isBoundaryLoop();
+  next.apex = next.he.next().next().vertex();
 
-CandidateVertex checkReachability4(CandidateName name, Vertex vertex, Vector2 flatV0, Vector2 flatTarget, Face targetFace,
-                                   Vector2 p1a, Vector2 p1b, Vector2 p2a, Vector2 p2b, Vector2 p3a, Vector2 p3b,
-                                   Vector2 p4a, Vector2 p4b, double scaleTolerance) {
-  Portal portals[] = {{p1a, p1b}, {p2a, p2b}, {p3a, p3b}, {p4a, p4b}};
-  return checkReachability(name, vertex, flatV0, flatTarget, targetFace, portals, 4, scaleTolerance);
-}
+  next.flat_he_a = getFlatPosition(next.he.tailVertex(), prev.he, prev.flat_he_a, prev.flat_he_b, prev.flat_apex);
+  next.flat_he_b = getFlatPosition(next.he.twin().tailVertex(), prev.he, prev.flat_he_a, prev.flat_he_b, prev.flat_apex);
 
-CandidateVertex checkReachability5(CandidateName name, Vertex vertex, Vector2 flatV0, Vector2 flatTarget, Face targetFace,
-                                   Vector2 p1a, Vector2 p1b, Vector2 p2a, Vector2 p2b, Vector2 p3a, Vector2 p3b,
-                                   Vector2 p4a, Vector2 p4b, Vector2 p5a, Vector2 p5b, double scaleTolerance) {
-  Portal portals[] = {{p1a, p1b}, {p2a, p2b}, {p3a, p3b}, {p4a, p4b}, {p5a, p5b}};
-  return checkReachability(name, vertex, flatV0, flatTarget, targetFace, portals, 5, scaleTolerance);
+  // The "fell off" vertex: N transition → tailVertex, P transition → tipVertex
+  Vertex fellOff = (direction == Tr::N) ? prev.he.tailVertex() : prev.he.tipVertex();
+  Vector2 ref = getFlatPosition(fellOff, prev.he, prev.flat_he_a, prev.flat_he_b, prev.flat_apex);
+  next.flat_apex = flattenVertexWithRef(next.apex, next.he, next.flat_he_a, next.flat_he_b, ref, geom);
+
+  // Accumulate parent portals + our own
+  for (uint8_t i = 0; i < prev.portalCount; i++) next.portals[i] = prev.portals[i];
+  next.portals[prev.portalCount] = {next.flat_he_a, next.flat_he_b};
+  next.portalCount = prev.portalCount + 1;
+  next.computed = true;
+  return next;
 }
 
 // ============================================================================
@@ -323,351 +317,95 @@ CandidateVertex checkReachability5(CandidateName name, Vertex vertex, Vector2 fl
 // ============================================================================
 
 ExplorationResult explore(Corner corner, VertexPositionGeometry& geom) {
-  // Fixed L5 exploration depth
-  constexpr bool computeL2 = true;
-  constexpr bool computeL3 = true;
-  constexpr bool computeL4 = true;
-  constexpr bool computeL5 = true;
-
-  Vertex v0 = corner.vertex();
-  Face f0 = corner.face();
-  Face fL1Raw = corner.halfedge().twin().face();
-
-  // Create result
   ExplorationResult result;
   result.corner = corner;
 
-  // NaN vector helper
-  Vector2 NaN = {std::numeric_limits<double>::quiet_NaN(),
-                 std::numeric_limits<double>::quiet_NaN()};
+  Vertex v0 = corner.vertex();
+  Face fL1Raw = corner.halfedge().twin().face();
 
   if (fL1Raw.isBoundaryLoop()) {
     blockAllCandidates(result);
     return result;
   }
 
-  // heL1 is in the adjacent face across edge (v0, v1) where v1 = corner.halfedge().tipVertex()
-  // The portal is the edge (v0, v1) - note: v0 is ON this portal
   Halfedge heL1 = corner.halfedge().twin();
-  Face fL1 = heL1.face();
-  // vL1 is the apex of fL1 opposite to heL1 (the vertex not on the portal)
-  // In a triangle: he.next().vertex() gives the tip of the next edge = the apex
   Vertex vL1 = heL1.next().next().vertex();
 
-  Vector3 heL1_v1_3d = geom.vertexPositions[heL1.tailVertex()];
-  Vector3 heL1_v2_3d = geom.vertexPositions[heL1.twin().tailVertex()];
-  double portalLen = norm(heL1_v1_3d - heL1_v2_3d);
+  Vector3 v1_3d = geom.vertexPositions[heL1.tailVertex()];
+  Vector3 v2_3d = geom.vertexPositions[heL1.twin().tailVertex()];
+  double portalLen = norm(v1_3d - v2_3d);
 
-  // Portal centered on X-axis (original VDG coordinate system)
-  Vector2 flat_heL1_a = {-portalLen / 2.0, 0.0};  // heL1.tailVertex()
-  Vector2 flat_heL1_b = {portalLen / 2.0, 0.0};   // v0 (heL1.twin().tailVertex())
+  Vector2 flat_a = {-portalLen / 2.0, 0.0};
+  Vector2 flat_b = { portalLen / 2.0, 0.0};
 
-  // v0 is ON the portal (it's one endpoint: heL1.twin().tailVertex() = v0)
-  // Compute v0's flat position (will be on X-axis at one endpoint)
-  double d_v0_to_v1 = norm(geom.vertexPositions[v0] - heL1_v1_3d);
-  double d_v0_to_v2 = norm(geom.vertexPositions[v0] - heL1_v2_3d);
-  Vector2 flat_v0 = computeTriangleApex(flat_heL1_a, flat_heL1_b, d_v0_to_v1, d_v0_to_v2, true);
+  Vector2 flat_v0 = computeTriangleApex(flat_a, flat_b,
+      norm(geom.vertexPositions[v0] - v1_3d),
+      norm(geom.vertexPositions[v0] - v2_3d), true);
 
   if (std::isnan(flat_v0.x)) {
     blockAllCandidates(result);
     return result;
   }
 
-  // The third vertex of f0 (not on portal) is the one that "falls off" from f0 to fL1
-  // This is corner.halfedge().next().tipVertex() = corner.halfedge().next().next().vertex()
-  // (In a triangle: corner.halfedge() -> next() -> tipVertex() = next().next().vertex())
+  // Reference for L1: the third vertex of f0 that "falls off"
   Vertex v0_third = corner.halfedge().next().tipVertex();
-  double d_v0third_to_v1 = norm(geom.vertexPositions[v0_third] - heL1_v1_3d);
-  double d_v0third_to_v2 = norm(geom.vertexPositions[v0_third] - heL1_v2_3d);
-  Vector2 flat_v0_third = computeTriangleApex(flat_heL1_a, flat_heL1_b, d_v0third_to_v1, d_v0third_to_v2, true);
+  Vector2 flat_ref = computeTriangleApex(flat_a, flat_b,
+      norm(geom.vertexPositions[v0_third] - v1_3d),
+      norm(geom.vertexPositions[v0_third] - v2_3d), true);
+  Vector2 flat_L1 = flattenVertexWithRef(vL1, heL1, flat_a, flat_b, flat_ref, geom);
 
-  // Compute L1 position - use flat_v0_third as reference (vertex that "fell off" from f0 to fL1)
-  bool computedL1 = true;
-  Vector2 flat_L1 = flattenVertexWithRef(vL1, heL1, flat_heL1_a, flat_heL1_b, flat_v0_third, geom);
+  // Base level (L1)
+  UnfoldLevel base;
+  base.he = heL1;
+  base.face = heL1.face();
+  base.apex = vL1;
+  base.flat_he_a = flat_a;
+  base.flat_he_b = flat_b;
+  base.flat_apex = flat_L1;
+  base.portals[0] = {flat_a, flat_b};
+  base.portalCount = 1;
+  base.computed = true;
+  base.isBoundary = false;
 
-  // ========== LEFT SIDE ==========
-  Halfedge heL2L, heL3L, heL4L, heL5L, heL4LM, heL5LM;
-  Face fL2L, fL3L, fL4L, fL5L, fL4LM, fL5LM;
-  Vertex vL2L, vL3L, vL4L, vL5L, vL5LM;
-  bool fL2LIsBoundary = true, fL3LIsBoundary = true, fL4LIsBoundary = true, fL5LIsBoundary = true;
-  bool fL4LMIsBoundary = true, fL5LMIsBoundary = true;
-  Vector2 flat_heL2L_a = NaN, flat_heL2L_b = NaN, flat_L2L = NaN;
-  Vector2 flat_heL3L_a = NaN, flat_heL3L_b = NaN, flat_L3L = NaN;
-  Vector2 flat_heL4L_a = NaN, flat_heL4L_b = NaN, flat_L4L = NaN;
-  Vector2 flat_heL5L_a = NaN, flat_heL5L_b = NaN, flat_L5L = NaN;
-  Vector2 flat_heL4LM_a = NaN, flat_heL4LM_b = NaN;
-  Vector2 flat_heL5LM_a = NaN, flat_heL5LM_b = NaN, flat_L5LM = NaN;
-  bool computedL2L = false, computedL3L = false, computedL4L = false, computedL5L = false;
-  bool computedL5LM = false;
+  // Unfold the trident: left (N,P,N,P), right (P,N,P,N), middle branches from L3
+  UnfoldLevel L2L  = unfoldNext(base, Tr::N, geom);
+  UnfoldLevel L3L  = unfoldNext(L2L,  Tr::P, geom);
+  UnfoldLevel L4L  = unfoldNext(L3L,  Tr::N, geom);
+  UnfoldLevel L5L  = unfoldNext(L4L,  Tr::P, geom);
+  UnfoldLevel L4LM = unfoldNext(L3L,  Tr::P, geom);  // Middle branch from L3L
+  UnfoldLevel L5LM = unfoldNext(L4LM, Tr::N, geom);
 
-  // Track fell-off reference points for each level
-  // When transitioning from face A to face B, the fell-off vertex is the one in A but not in B
-  // For L1 -> L2L: heL1.tailVertex() is not in fL2L (since heL2L = heL1.next().twin())
-  // For L2L -> L3L: heL2L.tailVertex() is not in fL3L (since heL3L = heL2L.prevOrbitFace().twin())
-  // For L3L -> L4L: heL3L.tailVertex() is not in fL4L
-  // For L4L -> L5L: heL4L.tailVertex() is not in fL5L
+  UnfoldLevel L2R  = unfoldNext(base, Tr::P, geom);
+  UnfoldLevel L3R  = unfoldNext(L2R,  Tr::N, geom);
+  UnfoldLevel L4R  = unfoldNext(L3R,  Tr::P, geom);
+  UnfoldLevel L5R  = unfoldNext(L4R,  Tr::N, geom);
+  UnfoldLevel L4RM = unfoldNext(L3R,  Tr::N, geom);  // Middle branch from L3R
+  UnfoldLevel L5RM = unfoldNext(L4RM, Tr::P, geom);
 
-  if (computeL2) {
-    heL2L = heL1.next().twin();
-    fL2L = heL2L.face();
-    fL2LIsBoundary = fL2L.isBoundaryLoop();
-    vL2L = heL2L.next().next().vertex();  // apex opposite to heL2L
+  // Check reachability using accumulated portals
+  auto check = [&](CandidateName name, const UnfoldLevel& lvl) -> CandidateVertex {
+    if (!lvl.computed) return makeUnreachable(name);
+    return checkReachability(name, lvl.apex, flat_v0, lvl.flat_apex,
+                             lvl.face, lvl.portals, lvl.portalCount, portalLen);
+  };
 
-    computedL2L = true;
-    {
-      flat_heL2L_a = getFlatPosition(heL2L.tailVertex(), heL1, flat_heL1_a, flat_heL1_b, flat_L1);
-      flat_heL2L_b = getFlatPosition(heL2L.twin().tailVertex(), heL1, flat_heL1_a, flat_heL1_b, flat_L1);
-      // Reference point for L2L: heL1.tailVertex() fell off from fL1 to fL2L
-      Vector2 refL2L = getFlatPosition(heL1.tailVertex(), heL1, flat_heL1_a, flat_heL1_b, flat_L1);
-      flat_L2L = flattenVertexWithRef(vL2L, heL2L, flat_heL2L_a, flat_heL2L_b, refL2L, geom);
-
-      // Continue to L3L if enabled and not boundary
-      if (computeL3 && !fL2LIsBoundary) {
-        heL3L = heL2L.next().next().twin();  // Prev = Next.Next in triangle
-        fL3L = heL3L.face();
-        fL3LIsBoundary = fL3L.isBoundaryLoop();
-        vL3L = heL3L.next().next().vertex();
-
-        computedL3L = true;
-        {
-          flat_heL3L_a = getFlatPosition(heL3L.tailVertex(), heL2L, flat_heL2L_a, flat_heL2L_b, flat_L2L);
-          flat_heL3L_b = getFlatPosition(heL3L.twin().tailVertex(), heL2L, flat_heL2L_a, flat_heL2L_b, flat_L2L);
-          // Reference point for L3L: heL2L.tipVertex() fell off from fL2L to fL3L
-          // (prev() transition: tip vertex falls off, not tail)
-          Vector2 refL3L = getFlatPosition(heL2L.tipVertex(), heL2L, flat_heL2L_a, flat_heL2L_b, flat_L2L);
-          flat_L3L = flattenVertexWithRef(vL3L, heL3L, flat_heL3L_a, flat_heL3L_b, refL3L, geom);
-
-          if (computeL4 && !fL3LIsBoundary) {
-            heL4L = heL3L.next().twin();
-            fL4L = heL4L.face();
-            fL4LIsBoundary = fL4L.isBoundaryLoop();
-            vL4L = heL4L.next().next().vertex();
-
-            computedL4L = true;
-            {
-              flat_heL4L_a = getFlatPosition(heL4L.tailVertex(), heL3L, flat_heL3L_a, flat_heL3L_b, flat_L3L);
-              flat_heL4L_b = getFlatPosition(heL4L.twin().tailVertex(), heL3L, flat_heL3L_a, flat_heL3L_b, flat_L3L);
-              // Reference point for L4L: heL3L.tailVertex() fell off from fL3L to fL4L
-              Vector2 refL4L = getFlatPosition(heL3L.tailVertex(), heL3L, flat_heL3L_a, flat_heL3L_b, flat_L3L);
-              flat_L4L = flattenVertexWithRef(vL4L, heL4L, flat_heL4L_a, flat_heL4L_b, refL4L, geom);
-
-              if (computeL5 && !fL4LIsBoundary) {
-                heL5L = heL4L.next().next().twin();
-                fL5L = heL5L.face();
-                fL5LIsBoundary = fL5L.isBoundaryLoop();
-                vL5L = heL5L.next().next().vertex();
-
-                computedL5L = true;
-                flat_heL5L_a = getFlatPosition(heL5L.tailVertex(), heL4L, flat_heL4L_a, flat_heL4L_b, flat_L4L);
-                flat_heL5L_b = getFlatPosition(heL5L.twin().tailVertex(), heL4L, flat_heL4L_a, flat_heL4L_b, flat_L4L);
-                // Reference point for L5L: heL4L.tipVertex() fell off from fL4L to fL5L
-                // (prev() transition: tip vertex falls off, not tail)
-                Vector2 refL5L = getFlatPosition(heL4L.tipVertex(), heL4L, flat_heL4L_a, flat_heL4L_b, flat_L4L);
-                flat_L5L = flattenVertexWithRef(vL5L, heL5L, flat_heL5L_a, flat_heL5L_b, refL5L, geom);
-              }
-            }
-          }
-
-          // L5LM: Middle path from left (branches via Prev.Twin from L3)
-          if (computeL5 && !fL3LIsBoundary) {
-            heL4LM = heL3L.next().next().twin();  // Different branch than L4L
-            fL4LM = heL4LM.face();
-            fL4LMIsBoundary = fL4LM.isBoundaryLoop();
-            if (!fL4LMIsBoundary) {
-              flat_heL4LM_a = getFlatPosition(heL4LM.tailVertex(), heL3L, flat_heL3L_a, flat_heL3L_b, flat_L3L);
-              flat_heL4LM_b = getFlatPosition(heL4LM.twin().tailVertex(), heL3L, flat_heL3L_a, flat_heL3L_b, flat_L3L);
-
-              heL5LM = heL4LM.next().twin();
-              fL5LM = heL5LM.face();
-              fL5LMIsBoundary = fL5LM.isBoundaryLoop();
-              vL5LM = heL5LM.next().next().vertex();
-
-              computedL5LM = true;
-              {
-                Vertex heL4LMApex = heL4LM.next().next().vertex();
-                // Reference for L4LM apex: heL3L.tipVertex() fell off from fL3L to fL4LM
-                // (prev() transition: tip vertex falls off, not tail)
-                Vector2 refL4LM = getFlatPosition(heL3L.tipVertex(), heL3L, flat_heL3L_a, flat_heL3L_b, flat_L3L);
-                Vector2 flatL4LMApex = flattenVertexWithRef(heL4LMApex, heL4LM, flat_heL4LM_a, flat_heL4LM_b, refL4LM, geom);
-                flat_heL5LM_a = getFlatPosition(heL5LM.tailVertex(), heL4LM, flat_heL4LM_a, flat_heL4LM_b, flatL4LMApex);
-                flat_heL5LM_b = getFlatPosition(heL5LM.twin().tailVertex(), heL4LM, flat_heL4LM_a, flat_heL4LM_b, flatL4LMApex);
-                // Reference for L5LM: heL4LM.tailVertex() fell off from fL4LM to fL5LM
-                // (next() transition: tail vertex falls off)
-                Vector2 refL5LM = getFlatPosition(heL4LM.tailVertex(), heL4LM, flat_heL4LM_a, flat_heL4LM_b, flatL4LMApex);
-                flat_L5LM = flattenVertexWithRef(vL5LM, heL5LM, flat_heL5LM_a, flat_heL5LM_b, refL5LM, geom);
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-
-  // ========== RIGHT SIDE ==========
-  // Similar structure to left side
-  // ========== RIGHT SIDE ==========
-  Halfedge heL2R, heL3R, heL4R, heL5R, heL4RM, heL5RM;
-  Face fL2R, fL3R, fL4R, fL5R, fL4RM, fL5RM;
-  Vertex vL2R, vL3R, vL4R, vL5R, vL5RM;
-  bool fL2RIsBoundary = true, fL3RIsBoundary = true, fL4RIsBoundary = true, fL5RIsBoundary = true;
-  bool fL4RMIsBoundary = true, fL5RMIsBoundary = true;
-  Vector2 flat_heL2R_a = NaN, flat_heL2R_b = NaN, flat_L2R = NaN;
-  Vector2 flat_heL3R_a = NaN, flat_heL3R_b = NaN, flat_L3R = NaN;
-  Vector2 flat_heL4R_a = NaN, flat_heL4R_b = NaN, flat_L4R = NaN;
-  Vector2 flat_heL5R_a = NaN, flat_heL5R_b = NaN, flat_L5R = NaN;
-  Vector2 flat_heL4RM_a = NaN, flat_heL4RM_b = NaN;
-  Vector2 flat_heL5RM_a = NaN, flat_heL5RM_b = NaN, flat_L5RM = NaN;
-  bool computedL2R = false, computedL3R = false, computedL4R = false, computedL5R = false;
-  bool computedL5RM = false;
-
-  if (computeL2) {
-    heL2R = heL1.next().next().twin();
-    fL2R = heL2R.face();
-    fL2RIsBoundary = fL2R.isBoundaryLoop();
-    vL2R = heL2R.next().next().vertex();
-
-    computedL2R = true;
-    {
-      flat_heL2R_a = getFlatPosition(heL2R.tailVertex(), heL1, flat_heL1_a, flat_heL1_b, flat_L1);
-      flat_heL2R_b = getFlatPosition(heL2R.twin().tailVertex(), heL1, flat_heL1_a, flat_heL1_b, flat_L1);
-      // Reference for L2R: heL1.tipVertex() (twin.tailVertex) fell off from fL1 to fL2R
-      // (heL2R = heL1.next().next().twin(), so the shared edge is different from L2L)
-      Vector2 refL2R = getFlatPosition(heL1.tipVertex(), heL1, flat_heL1_a, flat_heL1_b, flat_L1);
-      flat_L2R = flattenVertexWithRef(vL2R, heL2R, flat_heL2R_a, flat_heL2R_b, refL2R, geom);
-
-      if (computeL3 && !fL2RIsBoundary) {
-        heL3R = heL2R.next().twin();
-        fL3R = heL3R.face();
-        fL3RIsBoundary = fL3R.isBoundaryLoop();
-        vL3R = heL3R.next().next().vertex();
-
-        computedL3R = true;
-        {
-          flat_heL3R_a = getFlatPosition(heL3R.tailVertex(), heL2R, flat_heL2R_a, flat_heL2R_b, flat_L2R);
-          flat_heL3R_b = getFlatPosition(heL3R.twin().tailVertex(), heL2R, flat_heL2R_a, flat_heL2R_b, flat_L2R);
-          // Reference for L3R: heL2R.tailVertex() fell off from fL2R to fL3R
-          Vector2 refL3R = getFlatPosition(heL2R.tailVertex(), heL2R, flat_heL2R_a, flat_heL2R_b, flat_L2R);
-          flat_L3R = flattenVertexWithRef(vL3R, heL3R, flat_heL3R_a, flat_heL3R_b, refL3R, geom);
-
-          if (computeL4 && !fL3RIsBoundary) {
-            heL4R = heL3R.next().next().twin();
-            fL4R = heL4R.face();
-            fL4RIsBoundary = fL4R.isBoundaryLoop();
-            vL4R = heL4R.next().next().vertex();
-
-            computedL4R = true;
-            {
-              flat_heL4R_a = getFlatPosition(heL4R.tailVertex(), heL3R, flat_heL3R_a, flat_heL3R_b, flat_L3R);
-              flat_heL4R_b = getFlatPosition(heL4R.twin().tailVertex(), heL3R, flat_heL3R_a, flat_heL3R_b, flat_L3R);
-              // Reference for L4R: heL3R.tipVertex() fell off from fL3R to fL4R
-              // (prev() transition: tip vertex falls off, not tail)
-              Vector2 refL4R = getFlatPosition(heL3R.tipVertex(), heL3R, flat_heL3R_a, flat_heL3R_b, flat_L3R);
-              flat_L4R = flattenVertexWithRef(vL4R, heL4R, flat_heL4R_a, flat_heL4R_b, refL4R, geom);
-
-              if (computeL5 && !fL4RIsBoundary) {
-                heL5R = heL4R.next().twin();
-                fL5R = heL5R.face();
-                fL5RIsBoundary = fL5R.isBoundaryLoop();
-                vL5R = heL5R.next().next().vertex();
-
-                computedL5R = true;
-                flat_heL5R_a = getFlatPosition(heL5R.tailVertex(), heL4R, flat_heL4R_a, flat_heL4R_b, flat_L4R);
-                flat_heL5R_b = getFlatPosition(heL5R.twin().tailVertex(), heL4R, flat_heL4R_a, flat_heL4R_b, flat_L4R);
-                // Reference for L5R: heL4R.tailVertex() fell off from fL4R to fL5R
-                Vector2 refL5R = getFlatPosition(heL4R.tailVertex(), heL4R, flat_heL4R_a, flat_heL4R_b, flat_L4R);
-                flat_L5R = flattenVertexWithRef(vL5R, heL5R, flat_heL5R_a, flat_heL5R_b, refL5R, geom);
-              }
-            }
-          }
-
-          // L5RM: Middle path from right
-          if (computeL5 && !fL3RIsBoundary) {
-            heL4RM = heL3R.next().twin();
-            fL4RM = heL4RM.face();
-            fL4RMIsBoundary = fL4RM.isBoundaryLoop();
-            if (!fL4RMIsBoundary) {
-              flat_heL4RM_a = getFlatPosition(heL4RM.tailVertex(), heL3R, flat_heL3R_a, flat_heL3R_b, flat_L3R);
-              flat_heL4RM_b = getFlatPosition(heL4RM.twin().tailVertex(), heL3R, flat_heL3R_a, flat_heL3R_b, flat_L3R);
-
-              heL5RM = heL4RM.next().next().twin();
-              fL5RM = heL5RM.face();
-              fL5RMIsBoundary = fL5RM.isBoundaryLoop();
-              vL5RM = heL5RM.next().next().vertex();
-
-              computedL5RM = true;
-              {
-                Vertex heL4RMApex = heL4RM.next().next().vertex();
-                // Reference for L4RM apex: heL3R.tailVertex() fell off from fL3R to fL4RM
-                // (next() transition: tail vertex falls off)
-                Vector2 refL4RM = getFlatPosition(heL3R.tailVertex(), heL3R, flat_heL3R_a, flat_heL3R_b, flat_L3R);
-                Vector2 flatL4RMApex = flattenVertexWithRef(heL4RMApex, heL4RM, flat_heL4RM_a, flat_heL4RM_b, refL4RM, geom);
-                flat_heL5RM_a = getFlatPosition(heL5RM.tailVertex(), heL4RM, flat_heL4RM_a, flat_heL4RM_b, flatL4RMApex);
-                flat_heL5RM_b = getFlatPosition(heL5RM.twin().tailVertex(), heL4RM, flat_heL4RM_a, flat_heL4RM_b, flatL4RMApex);
-                // Reference for L5RM: heL4RM.tipVertex() fell off from fL4RM to fL5RM
-                // (prev() transition: tip vertex falls off, not tail)
-                Vector2 refL5RM = getFlatPosition(heL4RM.tipVertex(), heL4RM, flat_heL4RM_a, flat_heL4RM_b, flatL4RMApex);
-                flat_L5RM = flattenVertexWithRef(vL5RM, heL5RM, flat_heL5RM_a, flat_heL5RM_b, refL5RM, geom);
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-
-  // Check reachability for all candidates
-  double portalLen1 = portalLen;
-
-  result.L1 = computedL1
-    ? checkReachability1(CandidateName::L1, vL1, flat_v0, flat_L1, fL1, flat_heL1_a, flat_heL1_b, portalLen1)
-    : makeUnreachable(CandidateName::L1);
-
-  result.L2L = computedL2L
-    ? checkReachability2(CandidateName::L2L, vL2L, flat_v0, flat_L2L, fL2L, flat_heL1_a, flat_heL1_b, flat_heL2L_a, flat_heL2L_b, portalLen1)
-    : makeUnreachable(CandidateName::L2L);
-
-  result.L3L = computedL3L
-    ? checkReachability3(CandidateName::L3L, vL3L, flat_v0, flat_L3L, fL3L, flat_heL1_a, flat_heL1_b, flat_heL2L_a, flat_heL2L_b, flat_heL3L_a, flat_heL3L_b, portalLen1)
-    : makeUnreachable(CandidateName::L3L);
-
-  result.L4L = computedL4L
-    ? checkReachability4(CandidateName::L4L, vL4L, flat_v0, flat_L4L, fL4L, flat_heL1_a, flat_heL1_b, flat_heL2L_a, flat_heL2L_b, flat_heL3L_a, flat_heL3L_b, flat_heL4L_a, flat_heL4L_b, portalLen1)
-    : makeUnreachable(CandidateName::L4L);
-
-  result.L5L = computedL5L
-    ? checkReachability5(CandidateName::L5L, vL5L, flat_v0, flat_L5L, fL5L, flat_heL1_a, flat_heL1_b, flat_heL2L_a, flat_heL2L_b, flat_heL3L_a, flat_heL3L_b, flat_heL4L_a, flat_heL4L_b, flat_heL5L_a, flat_heL5L_b, portalLen1)
-    : makeUnreachable(CandidateName::L5L);
-
-  result.L5LM = computedL5LM
-    ? checkReachability5(CandidateName::L5LM, vL5LM, flat_v0, flat_L5LM, fL5LM, flat_heL1_a, flat_heL1_b, flat_heL2L_a, flat_heL2L_b, flat_heL3L_a, flat_heL3L_b, flat_heL4LM_a, flat_heL4LM_b, flat_heL5LM_a, flat_heL5LM_b, portalLen1)
-    : makeUnreachable(CandidateName::L5LM);
-
-  result.L2R = computedL2R
-    ? checkReachability2(CandidateName::L2R, vL2R, flat_v0, flat_L2R, fL2R, flat_heL1_a, flat_heL1_b, flat_heL2R_a, flat_heL2R_b, portalLen1)
-    : makeUnreachable(CandidateName::L2R);
-
-  result.L3R = computedL3R
-    ? checkReachability3(CandidateName::L3R, vL3R, flat_v0, flat_L3R, fL3R, flat_heL1_a, flat_heL1_b, flat_heL2R_a, flat_heL2R_b, flat_heL3R_a, flat_heL3R_b, portalLen1)
-    : makeUnreachable(CandidateName::L3R);
-
-  result.L4R = computedL4R
-    ? checkReachability4(CandidateName::L4R, vL4R, flat_v0, flat_L4R, fL4R, flat_heL1_a, flat_heL1_b, flat_heL2R_a, flat_heL2R_b, flat_heL3R_a, flat_heL3R_b, flat_heL4R_a, flat_heL4R_b, portalLen1)
-    : makeUnreachable(CandidateName::L4R);
-
-  result.L5R = computedL5R
-    ? checkReachability5(CandidateName::L5R, vL5R, flat_v0, flat_L5R, fL5R, flat_heL1_a, flat_heL1_b, flat_heL2R_a, flat_heL2R_b, flat_heL3R_a, flat_heL3R_b, flat_heL4R_a, flat_heL4R_b, flat_heL5R_a, flat_heL5R_b, portalLen1)
-    : makeUnreachable(CandidateName::L5R);
-
-  result.L5RM = computedL5RM
-    ? checkReachability5(CandidateName::L5RM, vL5RM, flat_v0, flat_L5RM, fL5RM, flat_heL1_a, flat_heL1_b, flat_heL2R_a, flat_heL2R_b, flat_heL3R_a, flat_heL3R_b, flat_heL4RM_a, flat_heL4RM_b, flat_heL5RM_a, flat_heL5RM_b, portalLen1)
-    : makeUnreachable(CandidateName::L5RM);
+  result[CandidateName::L1]   = check(CandidateName::L1,   base);
+  result[CandidateName::L2L]  = check(CandidateName::L2L,  L2L);
+  result[CandidateName::L3L]  = check(CandidateName::L3L,  L3L);
+  result[CandidateName::L4L]  = check(CandidateName::L4L,  L4L);
+  result[CandidateName::L5L]  = check(CandidateName::L5L,  L5L);
+  result[CandidateName::L5LM] = check(CandidateName::L5LM, L5LM);
+  result[CandidateName::L2R]  = check(CandidateName::L2R,  L2R);
+  result[CandidateName::L3R]  = check(CandidateName::L3R,  L3R);
+  result[CandidateName::L4R]  = check(CandidateName::L4R,  L4R);
+  result[CandidateName::L5R]  = check(CandidateName::L5R,  L5R);
+  result[CandidateName::L5RM] = check(CandidateName::L5RM, L5RM);
 
   return result;
 }
 
 // ============================================================================
-// FaceStripWalker - Line-by-line port
-// C# from FaceStripWalker.cs
+// Face strip walker
 // ============================================================================
 
 WalkDirection determineWalkDirection(Vertex prev, Vertex current, Vertex next,
@@ -899,130 +637,44 @@ Face selectFirstFace(Vertex v0, Vertex v1, Vertex v2,
 }
 
 // ============================================================================
-// VeryDiscreteGeodesicPathfinder - Line-by-line port (partial - main A* loop)
-// C# from VeryDiscreteGeodesicPathfinder.cs
+// Standalone A* pathfinder (for testing)
 // ============================================================================
 
-// ============================================================================
-// GetCrossedFaces helper functions - ported line-by-line from C#
-// ============================================================================
+// Table-driven face traversal for getCrossedFaces
+struct TraversalSpec { uint8_t depth; Tr steps[4]; };
 
-static std::vector<Face> getFacesL2L(Face f0, Face fL1, Halfedge heL1) {
-  Halfedge heL2L = heL1.next().twin();
-  if (heL2L.face().isBoundaryLoop()) return {};
-  return {f0, fL1, heL2L.face()};
-}
-
-static std::vector<Face> getFacesL2R(Face f0, Face fL1, Halfedge heL1) {
-  Halfedge heL2R = heL1.prevOrbitFace().twin();
-  if (heL2R.face().isBoundaryLoop()) return {};
-  return {f0, fL1, heL2R.face()};
-}
-
-static std::vector<Face> getFacesL3L(Face f0, Face fL1, Halfedge heL1) {
-  Halfedge heL2L = heL1.next().twin();
-  if (heL2L.face().isBoundaryLoop()) return {};
-  Halfedge heL3L = heL2L.prevOrbitFace().twin();
-  if (heL3L.face().isBoundaryLoop()) return {};
-  return {f0, fL1, heL2L.face(), heL3L.face()};
-}
-
-static std::vector<Face> getFacesL3R(Face f0, Face fL1, Halfedge heL1) {
-  Halfedge heL2R = heL1.prevOrbitFace().twin();
-  if (heL2R.face().isBoundaryLoop()) return {};
-  Halfedge heL3R = heL2R.next().twin();
-  if (heL3R.face().isBoundaryLoop()) return {};
-  return {f0, fL1, heL2R.face(), heL3R.face()};
-}
-
-static std::vector<Face> getFacesL4L(Face f0, Face fL1, Halfedge heL1) {
-  Halfedge heL2L = heL1.next().twin();
-  if (heL2L.face().isBoundaryLoop()) return {};
-  Halfedge heL3L = heL2L.prevOrbitFace().twin();
-  if (heL3L.face().isBoundaryLoop()) return {};
-  Halfedge heL4L = heL3L.next().twin();
-  if (heL4L.face().isBoundaryLoop()) return {};
-  return {f0, fL1, heL2L.face(), heL3L.face(), heL4L.face()};
-}
-
-static std::vector<Face> getFacesL4R(Face f0, Face fL1, Halfedge heL1) {
-  Halfedge heL2R = heL1.prevOrbitFace().twin();
-  if (heL2R.face().isBoundaryLoop()) return {};
-  Halfedge heL3R = heL2R.next().twin();
-  if (heL3R.face().isBoundaryLoop()) return {};
-  Halfedge heL4R = heL3R.prevOrbitFace().twin();
-  if (heL4R.face().isBoundaryLoop()) return {};
-  return {f0, fL1, heL2R.face(), heL3R.face(), heL4R.face()};
-}
-
-static std::vector<Face> getFacesL5L(Face f0, Face fL1, Halfedge heL1) {
-  Halfedge heL2L = heL1.next().twin();
-  if (heL2L.face().isBoundaryLoop()) return {};
-  Halfedge heL3L = heL2L.prevOrbitFace().twin();
-  if (heL3L.face().isBoundaryLoop()) return {};
-  Halfedge heL4L = heL3L.next().twin();
-  if (heL4L.face().isBoundaryLoop()) return {};
-  Halfedge heL5L = heL4L.prevOrbitFace().twin();
-  if (heL5L.face().isBoundaryLoop()) return {};
-  return {f0, fL1, heL2L.face(), heL3L.face(), heL4L.face(), heL5L.face()};
-}
-
-static std::vector<Face> getFacesL5R(Face f0, Face fL1, Halfedge heL1) {
-  Halfedge heL2R = heL1.prevOrbitFace().twin();
-  if (heL2R.face().isBoundaryLoop()) return {};
-  Halfedge heL3R = heL2R.next().twin();
-  if (heL3R.face().isBoundaryLoop()) return {};
-  Halfedge heL4R = heL3R.prevOrbitFace().twin();
-  if (heL4R.face().isBoundaryLoop()) return {};
-  Halfedge heL5R = heL4R.next().twin();
-  if (heL5R.face().isBoundaryLoop()) return {};
-  return {f0, fL1, heL2R.face(), heL3R.face(), heL4R.face(), heL5R.face()};
-}
-
-static std::vector<Face> getFacesL5LM(Face f0, Face fL1, Halfedge heL1) {
-  Halfedge heL2L = heL1.next().twin();
-  if (heL2L.face().isBoundaryLoop()) return {};
-  Halfedge heL3L = heL2L.prevOrbitFace().twin();
-  if (heL3L.face().isBoundaryLoop()) return {};
-  Halfedge heL4LM = heL3L.prevOrbitFace().twin();
-  if (heL4LM.face().isBoundaryLoop()) return {};
-  Halfedge heL5LM = heL4LM.next().twin();
-  if (heL5LM.face().isBoundaryLoop()) return {};
-  return {f0, fL1, heL2L.face(), heL3L.face(), heL4LM.face(), heL5LM.face()};
-}
-
-static std::vector<Face> getFacesL5RM(Face f0, Face fL1, Halfedge heL1) {
-  Halfedge heL2R = heL1.prevOrbitFace().twin();
-  if (heL2R.face().isBoundaryLoop()) return {};
-  Halfedge heL3R = heL2R.next().twin();
-  if (heL3R.face().isBoundaryLoop()) return {};
-  Halfedge heL4RM = heL3R.next().twin();
-  if (heL4RM.face().isBoundaryLoop()) return {};
-  Halfedge heL5RM = heL4RM.prevOrbitFace().twin();
-  if (heL5RM.face().isBoundaryLoop()) return {};
-  return {f0, fL1, heL2R.face(), heL3R.face(), heL4RM.face(), heL5RM.face()};
-}
+static constexpr TraversalSpec TRAVERSALS[NUM_CANDIDATES] = {
+  {0, {}},                                  // L1
+  {1, {Tr::N}},                             // L2L
+  {2, {Tr::N, Tr::P}},                      // L3L
+  {3, {Tr::N, Tr::P, Tr::N}},               // L4L
+  {4, {Tr::N, Tr::P, Tr::N, Tr::P}},        // L5L
+  {4, {Tr::N, Tr::P, Tr::P, Tr::N}},        // L5LM
+  {1, {Tr::P}},                             // L2R
+  {2, {Tr::P, Tr::N}},                      // L3R
+  {3, {Tr::P, Tr::N, Tr::P}},               // L4R
+  {4, {Tr::P, Tr::N, Tr::P, Tr::N}},        // L5R
+  {4, {Tr::P, Tr::N, Tr::N, Tr::P}},        // L5RM
+};
 
 std::vector<Face> getCrossedFaces(Corner corner, CandidateName candidateName) {
-  Face f0 = corner.face();
-  Halfedge heL1 = corner.halfedge().twin();
-  if (heL1.face().isBoundaryLoop()) return {};
-  Face fL1 = heL1.face();
+  if (candidateName == CandidateName::None) return {};
 
-  switch (candidateName) {
-    case CandidateName::L1:   return {f0, fL1};
-    case CandidateName::L2L:  return getFacesL2L(f0, fL1, heL1);
-    case CandidateName::L2R:  return getFacesL2R(f0, fL1, heL1);
-    case CandidateName::L3L:  return getFacesL3L(f0, fL1, heL1);
-    case CandidateName::L3R:  return getFacesL3R(f0, fL1, heL1);
-    case CandidateName::L4L:  return getFacesL4L(f0, fL1, heL1);
-    case CandidateName::L4R:  return getFacesL4R(f0, fL1, heL1);
-    case CandidateName::L5L:  return getFacesL5L(f0, fL1, heL1);
-    case CandidateName::L5R:  return getFacesL5R(f0, fL1, heL1);
-    case CandidateName::L5LM: return getFacesL5LM(f0, fL1, heL1);
-    case CandidateName::L5RM: return getFacesL5RM(f0, fL1, heL1);
-    default: return {};
+  Face f0 = corner.face();
+  Halfedge he = corner.halfedge().twin();
+  if (he.face().isBoundaryLoop()) return {};
+
+  const TraversalSpec& spec = TRAVERSALS[static_cast<size_t>(candidateName)];
+  std::vector<Face> faces = {f0, he.face()};
+  faces.reserve(2 + spec.depth);
+
+  for (uint8_t i = 0; i < spec.depth; i++) {
+    he = (spec.steps[i] == Tr::N) ? he.next().twin() : he.next().next().twin();
+    if (he.face().isBoundaryLoop()) return {};
+    faces.push_back(he.face());
   }
+
+  return faces;
 }
 
 static std::vector<std::tuple<Vertex, double, PathStep>> getNeighbors(
@@ -1060,8 +712,8 @@ static std::vector<std::tuple<Vertex, double, PathStep>> getNeighbors(
   for (Corner corner : current.adjacentCorners()) {
     ExplorationResult exploreResult = explore(corner, geom);
 
-    for (const CandidateVertex& candidate : exploreResult.getReachableCandidates()) {
-      if (!candidate.hasVertex()) continue;
+    for (const CandidateVertex& candidate : exploreResult.candidates) {
+      if (!candidate.hasVertex() || !candidate.isReachable) continue;
       if (seenVertices.count(candidate.vertex.getIndex())) continue;
 
       // Skip corners (2+ boundary edges) unless it's the goal
@@ -1073,15 +725,13 @@ static std::vector<std::tuple<Vertex, double, PathStep>> getNeighbors(
 
       seenVertices.insert(candidate.vertex.getIndex());
 
-      std::vector<Face> crossedFaces = getCrossedFaces(corner, candidate.name);
-
       PathStep step;
       step.from = current;
       step.to = candidate.vertex;
       step.isExplorerJump = true;
       step.candidateName = candidate.name;
       step.distance = candidate.distance;
-      step.crossedFaces = crossedFaces;
+      step.sourceCorner = corner;
 
       result.push_back({candidate.vertex, candidate.distance, step});
     }
@@ -1217,7 +867,9 @@ std::pair<std::vector<Vertex>, std::vector<VertexPathStep>> findGeodesicPath(
     vs.from = step.from;
     vs.to = step.to;
     vs.isApexJump = step.isExplorerJump;
-    vs.crossedFaces = step.crossedFaces;
+    if (step.isExplorerJump) {
+      vs.crossedFaces = getCrossedFaces(step.sourceCorner, step.candidateName);
+    }
     vertexSteps.push_back(vs);
   }
 
@@ -1233,8 +885,7 @@ double computePathDistance(const std::vector<PathStep>& steps) {
 }
 
 // ============================================================================
-// VertexPathToFaceStripConverter - Line-by-line port
-// C# from VertexPathToFaceStripConverter.cs and FaceStripWalker.cs
+// Vertex path to face strip converter
 // ============================================================================
 
 static int findFaceIndex(const std::vector<Face>& faces, Face f) {
@@ -1244,14 +895,6 @@ static int findFaceIndex(const std::vector<Face>& faces, Face f) {
   return -1;
 }
 
-static int countFacesWithVertex(const std::vector<Face>& faces, Vertex v) {
-  int count = 0;
-  for (Face f : faces) {
-    if (faceContainsVertex(f, v)) count++;
-  }
-  return count;
-}
-
 static Face handleApexJump(
     std::vector<Face>& faces,
     Face currentFace,
@@ -1259,7 +902,6 @@ static Face handleApexJump(
     Vertex entryVertex,
     Vertex exitVertex) {
 
-  //     return currentFace;
   if (step.crossedFaces.empty()) {
     return currentFace;
   }
@@ -1273,7 +915,6 @@ static Face handleApexJump(
       WalkResult walkCW = walkToFace(currentFace, firstFace, sharedVertex, WalkDirection::Clockwise);
       WalkResult walkCCW = walkToFace(currentFace, firstFace, sharedVertex, WalkDirection::CounterClockwise);
 
-      //         FaceStripUtils.FaceContainsVertex(f, entryVertex) || FaceStripUtils.FaceContainsVertex(f, exitVertex));
       auto countBadFaces = [&](const WalkResult& w) -> int {
         int count = 0;
         for (Face f : w.faces) {
@@ -1309,7 +950,6 @@ static Face handleApexJump(
         for (Face f : walk->faces) {
           int existingIdx = findFaceIndex(faces, f);
           if (existingIdx >= 0) {
-            //         faces.RemoveRange(existingIdx + 1, faces.Count - existingIdx - 1);
             if (existingIdx + 1 < static_cast<int>(faces.size())) {
               faces.erase(faces.begin() + existingIdx + 1, faces.end());
             }
@@ -1330,7 +970,6 @@ static Face handleApexJump(
     int existingIdx = findFaceIndex(faces, crossedFace);
 
     if (existingIdx >= 0) {
-      //         faces.RemoveRange(existingIdx + 1, faces.Count - existingIdx - 1);
       if (existingIdx + 1 < static_cast<int>(faces.size())) {
         faces.erase(faces.begin() + existingIdx + 1, faces.end());
       }
@@ -1366,7 +1005,6 @@ static Face handleEdgeStep(
       const VertexPathStep& nextStep = steps[stepIndex + 1];
       nextVertex = nextStep.to;
 
-      //         targetFace = nextStep.CrossedFaces[0];
       if (nextStep.isApexJump && !nextStep.crossedFaces.empty()) {
         targetFace = nextStep.crossedFaces[0];
       }
@@ -1374,7 +1012,6 @@ static Face handleEdgeStep(
 
     currentFace = selectFirstFace(from, to, nextVertex, geom, targetFace);
 
-    //         faces.Add(currentFace);
     if (currentFace != Face() && findFaceIndex(faces, currentFace) < 0) {
       faces.push_back(currentFace);
     }
@@ -1384,14 +1021,12 @@ static Face handleEdgeStep(
 
   if (currentFace == Face()) {
     currentFace = getSharedFace(from, to);
-    //         faces.Add(currentFace);
     if (currentFace != Face() && findFaceIndex(faces, currentFace) < 0) {
       faces.push_back(currentFace);
     }
     return currentFace;
   }
 
-  //         return currentFace;
   if (faceContainsEdge(currentFace, from, to)) {
     return currentFace;
   }
@@ -1417,7 +1052,6 @@ static Face handleEdgeStep(
     int finalIdx = (walk->finalFace != Face()) ? findFaceIndex(faces, walk->finalFace) : -1;
 
     if (finalIdx >= 0) {
-      //         faces.RemoveRange(finalIdx + 1, faces.Count - finalIdx - 1);
       if (finalIdx + 1 < static_cast<int>(faces.size())) {
         faces.erase(faces.begin() + finalIdx + 1, faces.end());
       }
@@ -1428,7 +1062,6 @@ static Face handleEdgeStep(
       int existingIdx = findFaceIndex(faces, f);
 
       if (existingIdx >= 0) {
-        //         faces.RemoveRange(existingIdx + 1, faces.Count - existingIdx - 1);
         if (existingIdx + 1 < static_cast<int>(faces.size())) {
           faces.erase(faces.begin() + existingIdx + 1, faces.end());
         }
@@ -1441,7 +1074,6 @@ static Face handleEdgeStep(
   }
 
   Face fallbackFace = getSharedFace(from, to);
-  //         faces.Add(fallbackFace);
   if (fallbackFace != Face() && findFaceIndex(faces, fallbackFace) < 0) {
     faces.push_back(fallbackFace);
   }
@@ -1453,7 +1085,6 @@ std::vector<Face> convertPath(const std::vector<Vertex>& path,
                                Vertex entryVertex, Vertex exitVertex,
                                VertexPositionGeometry& geom) {
 
-  //         return new List<Hedge.Face>();
   if (path.size() < 2 || steps.empty()) {
     return {};
   }
@@ -1464,8 +1095,6 @@ std::vector<Face> convertPath(const std::vector<Vertex>& path,
   for (size_t i = 0; i < steps.size(); i++) {
     const VertexPathStep& step = steps[i];
 
-    //         currentFace = HandleApexJump(faces, currentFace, step, entryVertex, exitVertex);
-    //         currentFace = HandleEdgeStep(faces, currentFace, step, steps, i, entryVertex, exitVertex);
     if (step.isApexJump) {
       currentFace = handleApexJump(faces, currentFace, step, entryVertex, exitVertex);
     } else {
@@ -1497,49 +1126,7 @@ std::pair<std::vector<Face>, std::vector<Vertex>> findFaceStripWithPath(
 }
 
 // ============================================================================
-// GeodesicPathJoiner - Simplified (single segment case)
-// Full implementation would handle multi-segment paths
-// ============================================================================
-
-std::pair<std::vector<Vertex>, std::vector<VertexPathStep>> joinPaths(
-    const std::vector<std::pair<std::vector<Vertex>, std::vector<VertexPathStep>>>& segments,
-    Vertex entryVertex, Vertex exitVertex,
-    bool removeLoops) {
-
-  if (segments.empty()) {
-    return {{}, {}};
-  }
-
-  if (segments.size() == 1) {
-    return segments[0];
-  }
-
-  // For multiple segments, concatenate (simplified - full impl handles loops)
-  std::vector<Vertex> resultPath;
-  std::vector<VertexPathStep> resultSteps;
-
-  for (size_t i = 0; i < segments.size(); i++) {
-    const std::vector<Vertex>& segPath = segments[i].first;
-    const std::vector<VertexPathStep>& segSteps = segments[i].second;
-
-    size_t startIdx = (i > 0 && !resultPath.empty() &&
-                       !segPath.empty() && resultPath.back() == segPath[0]) ? 1 : 0;
-
-    for (size_t j = startIdx; j < segPath.size(); j++) {
-      resultPath.push_back(segPath[j]);
-    }
-
-    for (size_t k = 0; k < segSteps.size(); k++) {
-      resultSteps.push_back(segSteps[k]);
-    }
-  }
-
-  return std::make_pair(resultPath, resultSteps);
-}
-
-// ============================================================================
-// CachedVeryDiscreteGeodesicPathfinder Implementation
-// C# equivalent: CachedGeodesicPathfinder.cs
+// CachedVeryDiscreteGeodesicPathfinder
 //
 // Key optimizations:
 // 1. Per-corner exploration cache (avoids recomputing L1-L7 unfolds)
@@ -1659,33 +1246,26 @@ CachedVeryDiscreteGeodesicPathfinder::getNeighbors(Vertex current, Vertex goal, 
   for (Corner corner : corners) {
     const ExplorationResult& exploreResult = getOrComputeExploration(corner);
 
-    // All L5 candidates (11 total)
-    std::array<const CandidateVertex*, 11> allCandidates = {{
-      &exploreResult.L1,
-      &exploreResult.L2L, &exploreResult.L3L, &exploreResult.L4L, &exploreResult.L5L, &exploreResult.L5LM,
-      &exploreResult.L2R, &exploreResult.L3R, &exploreResult.L4R, &exploreResult.L5R, &exploreResult.L5RM
-    }};
-
-    for (const CandidateVertex* candidate : allCandidates) {
-      if (!candidate->hasVertex() || !candidate->isReachable)
+    for (const CandidateVertex& candidate : exploreResult.candidates) {
+      if (!candidate.hasVertex() || !candidate.isReachable)
         continue;
 
-      if (seenVertices.count(candidate->vertex.getIndex()))
+      if (seenVertices.count(candidate.vertex.getIndex()))
         continue;
-      seenVertices.insert(candidate->vertex.getIndex());
+      seenVertices.insert(candidate.vertex.getIndex());
 
-      if (candidate->vertex != goal && boundaryEdgeCount[candidate->vertex] >= 2)
+      if (candidate.vertex != goal && boundaryEdgeCount[candidate.vertex] >= 2)
         continue;
 
       PathStep step;
       step.from = current;
-      step.to = candidate->vertex;
+      step.to = candidate.vertex;
       step.isExplorerJump = true;
-      step.candidateName = candidate->name;
-      step.distance = candidate->distance;
-      step.crossedFaces = getCrossedFaces(corner, candidate->name);
+      step.candidateName = candidate.name;
+      step.distance = candidate.distance;
+      step.sourceCorner = corner;
 
-      neighbors.push_back({candidate->vertex, candidate->distance, std::move(step)});
+      neighbors.push_back({candidate.vertex, candidate.distance, step});
     }
   }
 
@@ -1817,7 +1397,9 @@ CachedVeryDiscreteGeodesicPathfinder::findGeodesicPath(Vertex from, Vertex to) {
     vs.from = step.from;
     vs.to = step.to;
     vs.isApexJump = step.isExplorerJump;
-    vs.crossedFaces = step.crossedFaces;
+    if (step.isExplorerJump) {
+      vs.crossedFaces = getCrossedFaces(step.sourceCorner, step.candidateName);
+    }
     vertexSteps.push_back(vs);
   }
 
