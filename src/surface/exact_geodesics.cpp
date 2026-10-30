@@ -631,7 +631,8 @@ bool GeodesicAlgorithmExact::check_stop_conditions(unsigned& index) const {
   }
 
   if (m_stop_vertices.empty()) {
-    return false;
+    // without stop vertices, the distance bound alone stops the propagation
+    return stop_dist < GEODESIC_INF;
   }
 
   while (index < m_stop_vertices.size()) {
