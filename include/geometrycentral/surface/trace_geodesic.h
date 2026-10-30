@@ -52,5 +52,34 @@ TraceGeodesicResult traceGeodesic(IntrinsicGeometryInterface& geom, Face startFa
 // Return value indicates success. If true, the resulting ends in the 1-ring of targetVertex as expected.
 bool trimTraceResult(TraceGeodesicResult& traceResult, Vertex targetVertex);
 
+// Trace a geodesic segment known to run from vertex startVert to vertex endVert (an intrinsic edge between two
+// vertices of the input mesh): traceVec in startVert's tangent space, its norm the segment's length. The result
+// runs from startVert through the edge crossings to endVert. The face-by-face trace above is used and trimmed
+// with trimTraceResult; when it does not reach endVert's 1-ring, or the length of the trimmed path differs from
+// norm(traceVec) by more than lengthTol relative (the trace turned off course at a degenerate face or at a vertex
+// it passed through), the segment is traced again by unfolding its faces along the line, which has neither
+// failure. If that fails too, the face-by-face trace is returned as before: trimmed if it trimmed, else untrimmed.
+std::vector<SurfacePoint> traceGeodesicBetweenVertices(IntrinsicGeometryInterface& geom, Vertex startVert,
+                                                       Vector2 traceVec, Vertex endVert,
+                                                       const TraceOptions& traceOptions = defaultTraceOptions,
+                                                       double lengthTol = 1e-9);
+
+// Trace by unfolding: the faces the segment crosses are laid out one by one in the segment's frame (startVert at
+// the origin, the segment along +x), each crossed edge chosen by the side of the line its new vertex lies on;
+// from the vertex positions if geom is a VertexPositionGeometry (the edge lengths lose the width of a sliver).
+// Where the line passes within rounding of a vertex both sides are tried. The line arrives where endVert is laid
+// out at a point whose chord from the start has the segment's length (within arriveTol relative) and crosses
+// every edge crossed so far; the crossings are then put on that chord, so the path ends exactly at endVert.
+// traceVec only aims the line: where the line misses endVert (a direction carried through degenerate faces can
+// be off while the length is right), it is turned toward endVert's unfolded position and unfolded again (up to
+// 8 times). Returns an empty vector if it never arrives.
+std::vector<SurfacePoint> traceGeodesicByUnfolding(IntrinsicGeometryInterface& geom, Vertex startVert,
+                                                   Vector2 traceVec, Vertex endVert, double arriveTol = 1e-6,
+                                                   size_t maxIters = INVALID_IND);
+
+// Length of a path of surface points (from the vertex positions if geom is a VertexPositionGeometry), each step
+// measured in a face the two points share; NaN if two consecutive points share no face.
+double surfacePathLength(IntrinsicGeometryInterface& geom, const std::vector<SurfacePoint>& path);
+
 } // namespace surface
 } // namespace geometrycentral
