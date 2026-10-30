@@ -55,10 +55,12 @@ bool trimTraceResult(TraceGeodesicResult& traceResult, Vertex targetVertex);
 // Trace a geodesic segment known to run from vertex startVert to vertex endVert (an intrinsic edge between two
 // vertices of the input mesh): traceVec in startVert's tangent space, its norm the segment's length. The result
 // runs from startVert through the edge crossings to endVert. The face-by-face trace above is used and trimmed
-// with trimTraceResult; when it does not reach endVert's 1-ring, or the length of the trimmed path differs from
-// norm(traceVec) by more than lengthTol relative (the trace turned off course at a degenerate face or at a vertex
-// it passed through), the segment is traced again by unfolding its faces along the line, which has neither
-// failure. If that fails too, the face-by-face trace is returned as before: trimmed if it trimmed, else untrimmed.
+// with trimTraceResult. It is kept at once when it ends within lengthTol * norm(traceVec) of endVert (bounded from
+// the edge lengths) and crossed only edge interiors on the way; otherwise it is kept if the trimmed path's length
+// (surfacePathLength) is within lengthTol relative of norm(traceVec). When neither holds (the trace did not reach
+// endVert's 1-ring, or turned off course at a degenerate face or at a vertex it passed through), the segment is
+// traced again by unfolding its faces along the line, which has neither failure. If that fails too, the
+// face-by-face trace is returned as before: trimmed if it trimmed, else untrimmed.
 std::vector<SurfacePoint> traceGeodesicBetweenVertices(IntrinsicGeometryInterface& geom, Vertex startVert,
                                                        Vector2 traceVec, Vertex endVert,
                                                        const TraceOptions& traceOptions = defaultTraceOptions,

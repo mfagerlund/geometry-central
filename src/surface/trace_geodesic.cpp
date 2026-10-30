@@ -954,9 +954,12 @@ double surfacePathLength(IntrinsicGeometryInterface& geom, const std::vector<Sur
     // from the positions (the edge lengths lose the width of a sliver); a step's face is only checked, so no layout
     const VertexData<Vector3>& pos = positions->inputVertexPositions;
     double L = 0.;
+    Vector3 prev = path.empty() ? Vector3::zero() : path[0].interpolate(pos);
     for (size_t i = 0; i + 1 < path.size(); i++) {
       if (!shareFace(path[i], path[i + 1])) return std::numeric_limits<double>::quiet_NaN();
-      L += norm(path[i + 1].interpolate(pos) - path[i].interpolate(pos));
+      const Vector3 next = path[i + 1].interpolate(pos);
+      L += norm(next - prev);
+      prev = next;
     }
     return L;
   }
@@ -1254,21 +1257,66 @@ std::vector<SurfacePoint> traceGeodesicByUnfolding(IntrinsicGeometryInterface& g
   return out;
 }
 
+namespace {
+// An upper bound on the distance from surface point p to vertex v, from the edge lengths: exact on an edge of v,
+// by the triangle inequality over the corners in a face of v; infinite if p is not on an edge or face of v.
+double endDistanceBound(IntrinsicGeometryInterface& geom, const SurfacePoint& p, Vertex v) {
+  const double inf = std::numeric_limits<double>::infinity();
+  switch (p.type) {
+  case SurfacePointType::Vertex:
+    return p.vertex == v ? 0. : inf;
+  case SurfacePointType::Edge: {
+    Halfedge h = p.edge.halfedge();
+    geom.requireEdgeLengths();
+    const double l = geom.edgeLengths[p.edge];
+    geom.unrequireEdgeLengths();
+    if (h.tailVertex() == v) return std::fabs(p.tEdge) * l;
+    if (h.tipVertex() == v) return std::fabs(1. - p.tEdge) * l;
+    return inf;
+  }
+  case SurfacePointType::Face: {
+    Halfedge h = p.face.halfedge();
+    const double b[3] = {p.faceCoords.x, p.faceCoords.y, p.faceCoords.z}; // at h's tail, next's tail, next's tip
+    geom.requireEdgeLengths();
+    double d = inf;
+    for (int k = 0; k < 3; k++, h = h.next()) {
+      if (h.tailVertex() != v) continue;
+      // v at corner k: the other two corners along h (corner k + 1) and along the previous halfedge (k + 2)
+      d = std::fabs(b[(k + 1) % 3]) * geom.edgeLengths[h.edge()] +
+          std::fabs(b[(k + 2) % 3]) * geom.edgeLengths[h.next().next().edge()];
+    }
+    geom.unrequireEdgeLengths();
+    return d;
+  }
+  }
+  return inf;
+}
+} // namespace
+
 std::vector<SurfacePoint> traceGeodesicBetweenVertices(IntrinsicGeometryInterface& geom, Vertex startVert,
                                                        Vector2 traceVec, Vertex endVert,
                                                        const TraceOptions& traceOptions, double lengthTol) {
   TraceOptions options = traceOptions;
   options.includePath = true;
   TraceGeodesicResult result = traceGeodesic(geom, SurfacePoint(startVert), traceVec, options);
+  const double len = norm(traceVec);
+  // A trace that ends at endVert and crossed only edge interiors on the way went right: then the trimmed trace is
+  // kept without measuring it. At a vertex (or an edge's end) the trace picks a new direction, and can still end at
+  // endVert by another route (near-coincident vertices), so such a trace is measured.
+  bool atEnd = !result.pathPoints.empty() && endDistanceBound(geom, result.pathPoints.back(), endVert) <= lengthTol * len;
+  for (size_t i = 1; atEnd && i + 1 < result.pathPoints.size(); i++) {
+    const SurfacePoint& p = result.pathPoints[i];
+    if (p.type != SurfacePointType::Edge || !(p.tEdge > 0. && p.tEdge < 1.)) atEnd = false;
+  }
   const bool trimmed = trimTraceResult(result, endVert);
   if (trimmed) {
     result.pathPoints.push_back(SurfacePoint(endVert));
-    const double len = norm(traceVec);
-    if (std::fabs(surfacePathLength(geom, result.pathPoints) - len) <= lengthTol * len) return result.pathPoints;
+    if (atEnd) return std::move(result.pathPoints);
+    if (std::fabs(surfacePathLength(geom, result.pathPoints) - len) <= lengthTol * len) return std::move(result.pathPoints);
   }
   std::vector<SurfacePoint> unfolded = traceGeodesicByUnfolding(geom, startVert, traceVec, endVert, 1e-6, options.maxIters);
   if (!unfolded.empty()) return unfolded;
-  if (trimmed) return result.pathPoints;
+  if (trimmed) return std::move(result.pathPoints);
   return traceGeodesic(geom, SurfacePoint(startVert), traceVec, options).pathPoints;
 }
 
