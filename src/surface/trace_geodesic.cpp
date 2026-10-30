@@ -911,9 +911,56 @@ bool pointInFace(IntrinsicGeometryInterface& geom, Face f, const SurfacePoint& p
 }
 } // namespace
 
+namespace {
+// Whether surface point p lies on face f (vertex of f, edge of f, or in f): pointInFace without the layout.
+bool onFace(const SurfacePoint& p, Face f) {
+  Halfedge h = f.halfedge();
+  switch (p.type) {
+  case SurfacePointType::Vertex:
+    for (int k = 0; k < 3; k++, h = h.next())
+      if (h.tailVertex() == p.vertex) return true;
+    return false;
+  case SurfacePointType::Edge:
+    for (int k = 0; k < 3; k++, h = h.next())
+      if (h.edge() == p.edge) return true;
+    return false;
+  case SurfacePointType::Face:
+    return p.face == f;
+  }
+  return false;
+}
+
+// Whether two consecutive path points share a face, over the faces of a in the order surfacePathLength tries them.
+bool shareFace(const SurfacePoint& a, const SurfacePoint& b) {
+  switch (a.type) {
+  case SurfacePointType::Vertex:
+    for (Face f : a.vertex.adjacentFaces())
+      if (onFace(b, f)) return true;
+    return false;
+  case SurfacePointType::Edge:
+    if (a.edge.halfedge().isInterior() && onFace(b, a.edge.halfedge().face())) return true;
+    if (a.edge.halfedge().twin().isInterior() && onFace(b, a.edge.halfedge().twin().face())) return true;
+    return false;
+  case SurfacePointType::Face:
+    return onFace(b, a.face);
+  }
+  return false;
+}
+} // namespace
+
 double surfacePathLength(IntrinsicGeometryInterface& geom, const std::vector<SurfacePoint>& path) {
-  geom.requireHalfedgeVectorsInFace();
   VertexPositionGeometry* positions = dynamic_cast<VertexPositionGeometry*>(&geom);
+  if (positions) {
+    // from the positions (the edge lengths lose the width of a sliver); a step's face is only checked, so no layout
+    const VertexData<Vector3>& pos = positions->inputVertexPositions;
+    double L = 0.;
+    for (size_t i = 0; i + 1 < path.size(); i++) {
+      if (!shareFace(path[i], path[i + 1])) return std::numeric_limits<double>::quiet_NaN();
+      L += norm(path[i + 1].interpolate(pos) - path[i].interpolate(pos));
+    }
+    return L;
+  }
+  geom.requireHalfedgeVectorsInFace();
   double L = 0.;
   std::vector<Face> faces;
   for (size_t i = 0; i + 1 < path.size(); i++) {
@@ -935,10 +982,7 @@ double surfacePathLength(IntrinsicGeometryInterface& geom, const std::vector<Sur
     for (Face f : faces) {
       Vector2 a, b;
       if (pointInFace(geom, f, p, a) && pointInFace(geom, f, path[i + 1], b)) {
-        // from the positions if the geometry has them (the edge lengths lose the width of a sliver)
-        L += positions ? norm(path[i + 1].interpolate(positions->inputVertexPositions) -
-                              p.interpolate(positions->inputVertexPositions))
-                       : norm(b - a);
+        L += norm(b - a);
         shared = true;
         break;
       }
